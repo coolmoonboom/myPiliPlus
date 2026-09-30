@@ -95,7 +95,8 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
                 leading: const Icon(Icons.upload_file_outlined, size: 20),
                 title: const Text('导入本地字幕文件'),
                 subtitle: const Text('支持 .srt / .vtt，导入后立即在播放器显示'),
-                onTap: () => videoDetailController.importSubtitleFile(context),
+                onTap: () =>
+                    widget.videoDetailController.importSubtitleFile(context),
               ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
