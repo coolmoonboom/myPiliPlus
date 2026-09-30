@@ -1,5 +1,7 @@
 package com.example.piliplus;
 
+import com.example.piliplusfr.R;
+
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.PendingIntent;
