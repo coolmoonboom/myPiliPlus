@@ -779,6 +779,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
       BottomControlType.abLoop => Obx(() {
         final enabled = plPlayerController.abLoopEnabled.value;
         final ready = plPlayerController.abLoopReady;
+        final shown = plPlayerController.abLoopPanelShown.value;
         return ComBtn(
           width: widgetWidth,
           height: 30,
@@ -786,11 +787,11 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           icon: Icon(
             Icons.repeat,
             size: 22,
-            color: enabled
+            color: enabled || shown
                 ? colorScheme.primary
                 : (ready ? Colors.white : const Color(0x62FFFFFF)),
           ),
-          onTap: () => showAbLoopSheet(context, plPlayerController),
+          onTap: plPlayerController.toggleAbLoopPanel,
           onLongPress: () {
             Feedback.forLongPress(context);
             plPlayerController.toggleAbLoop();
@@ -1013,6 +1014,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     plPlayerController
       ..seekToPos = Duration(milliseconds: newPos)
       ..seekPosition.value = seconds;
+    plPlayerController.applyAbLoopTrack(seconds);
     if (!plPlayerController.isFileSource &&
         plPlayerController.showSeekPreview) {
       plPlayerController.updatePreviewIndex(seconds);
@@ -1699,6 +1701,33 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
         //     child: const Text('scale'),
         //   ),
         // ),
+        Obx(
+          () => plPlayerController.abLoopPanelShown.value
+              ? Align(
+                  alignment: (isFullScreen || maxWidth > maxHeight)
+                      ? Alignment.centerLeft
+                      : Alignment.bottomCenter,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      12,
+                      6,
+                      12,
+                      isFullScreen ? 96 : 74,
+                    ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 420,
+                        maxHeight: math.max(
+                          120,
+                          maxHeight - (isFullScreen ? 96 : 74) - 12,
+                        ),
+                      ),
+                      child: AbLoopCard(controller: plPlayerController),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
         Obx(
           () =>
               showRestoreScaleBtn.value && plPlayerController.showControls.value

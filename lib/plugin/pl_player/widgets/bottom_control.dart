@@ -35,6 +35,7 @@ class BottomControl extends StatelessWidget {
       controller.updatePreviewIndex(duration.seconds);
     }
     controller.seekPosition.value = duration.seconds;
+    controller.applyAbLoopTrack(duration.seconds);
   }
 
   void onSeek(int milliseconds) {

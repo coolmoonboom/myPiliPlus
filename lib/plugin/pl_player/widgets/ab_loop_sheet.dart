@@ -1,29 +1,43 @@
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
-import 'package:flutter/material.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
-import 'package:PiliPlus/utils/page_utils.dart';
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-/// 指定片段循环（AB 循环）配置面板
+/// 片段循环配置卡片（播放器内嵌 overlay，非模态）
 ///
-/// 支持两种设置方式：
-/// 1. 边播放边设置：点击「当前」以当前播放位置作为起点/终点
-/// 2. 手动输入：点击起点/终点时间直接输入时间轴（如 1:00 或 75）
-void showAbLoopSheet(BuildContext context, PlPlayerController controller) {
-  PageUtils.showVideoBottomSheet(
-    context,
-    maxWidth: 420,
-    child: _AbLoopSheet(controller: controller),
-  );
-}
-
-class _AbLoopSheet extends StatelessWidget {
-  const _AbLoopSheet({required this.controller});
+/// 特性：
+/// 1. 拖动进度条不会收起卡片
+/// 2. 「起点 A」「终点 B」为追踪按钮：激活后拖动进度条/播放时实时写入点位
+/// 3. 每行支持点击时间手动输入、取「当前」位置、单独「清除」
+class AbLoopCard extends StatelessWidget {
+  const AbLoopCard({required this.controller, super.key});
 
   final PlPlayerController controller;
 
-  String _fmt(int seconds) =>
+  static String _fmt(int seconds) =>
       seconds < 0 ? '未设置' : DurationUtils.formatDuration(seconds);
+
+  /// 解析用户输入的时间：支持 `1:15`、`01:15.500`、`75` 等
+  static int _parse(String input) {
+    final text = input.trim();
+    if (text.isEmpty) {
+      return -1;
+    }
+    final parts = text.split(':');
+    if (parts.length == 1) {
+      final seconds = double.tryParse(parts[0].replaceAll(',', '.'));
+      return seconds?.round() ?? -1;
+    }
+    double total = 0;
+    for (final part in parts) {
+      final value = double.tryParse(part.replaceAll(',', '.'));
+      if (value == null) {
+        return -1;
+      }
+      total = total * 60 + value;
+    }
+    return total.round();
+  }
 
   Future<void> _editTime({
     required BuildContext context,
@@ -64,155 +78,138 @@ class _AbLoopSheet extends StatelessWidget {
     }
   }
 
-  /// 解析用户输入的时间：支持 `1:15`、`01:15.500`、`75` 等
-  static int _parse(String input) {
-    final text = input.trim();
-    if (text.isEmpty) {
-      return -1;
-    }
-    final parts = text.split(':');
-    if (parts.length == 1) {
-      final seconds = double.tryParse(parts[0].replaceAll(',', '.'));
-      return seconds?.round() ?? -1;
-    }
-    double total = 0;
-    for (final part in parts) {
-      final value = double.tryParse(part.replaceAll(',', '.'));
-      if (value == null) {
-        return -1;
-      }
-      total = total * 60 + value;
-    }
-    return total.round();
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Material(
       clipBehavior: Clip.hardEdge,
-      color: theme.colorScheme.surface,
+      color: colorScheme.surfaceContainerHigh,
       borderRadius: const BorderRadius.all(Radius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Icon(Icons.repeat, size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  '片段循环',
-                  style: theme.textTheme.titleMedium,
-                ),
-                const Spacer(),
-                Obx(
-                  () => controller.abLoopEnabled.value
-                      ? Text(
-                          '循环中',
-                          style: TextStyle(
-                            color: theme.colorScheme.primary,
-                            fontSize: 13,
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-                IconButton(
-                  tooltip: '关闭',
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Get.back(),
-                ),
-              ],
-            ),
-            const Divider(height: 12),
             Obx(() {
-              final position = controller.position.value;
-              return Text(
-                '当前播放位置：${_fmt(position)}',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.outline,
+              final enabled = controller.abLoopEnabled.value;
+              return Row(
+                children: [
+                  Icon(
+                    Icons.repeat,
+                    size: 18,
+                    color: enabled
+                        ? colorScheme.primary
+                        : colorScheme.onSurface,
+                  ),
+                  const SizedBox(width: 6),
+                  Text('片段循环', style: theme.textTheme.titleSmall),
+                  const Spacer(),
+                  if (enabled)
+                    Text(
+                      '循环中',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                  IconButton(
+                    tooltip: '关闭',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: controller.toggleAbLoopPanel,
+                  ),
+                ],
+              );
+            }),
+            Obx(() {
+              final tracking = controller.abLoopTracking.value;
+              if (tracking == 0) {
+                return const SizedBox.shrink();
+              }
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  tracking == 1
+                      ? '正在追踪起点 A：拖动进度条或播放，点值实时更新，再点一次取消'
+                      : '正在追踪终点 B：拖动进度条或播放，点值实时更新，再点一次取消',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.primary,
+                  ),
                 ),
               );
             }),
-            const SizedBox(height: 12),
             Obx(
               () => _buildPointRow(
                 context,
-                theme,
                 label: '起点 A',
+                tracking: controller.abLoopTracking.value == 1,
                 value: controller.abLoopStart.value,
-                onUseCurrent: () => controller.setAbLoopStart(),
+                onToggleTracking: () => controller.toggleAbLoopTracking(1),
                 onInput: () => _editTime(
                   context: context,
                   title: '设置起点 A',
                   initial: controller.abLoopStart.value,
-                  onConfirm: (v) => controller.setAbLoopStart(v),
+                  onConfirm: controller.setAbLoopStart,
                 ),
-                onClear: () => controller.abLoopStart.value = -1,
+                onUseCurrent: controller.setAbLoopStart,
+                onClear: () {
+                  controller.abLoopStart.value = -1;
+                  if (controller.abLoopTracking.value == 1) {
+                    controller.abLoopTracking.value = 0;
+                  }
+                },
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 6),
             Obx(
               () => _buildPointRow(
                 context,
-                theme,
                 label: '终点 B',
+                tracking: controller.abLoopTracking.value == 2,
                 value: controller.abLoopEnd.value,
-                onUseCurrent: () => controller.setAbLoopEnd(),
+                onToggleTracking: () => controller.toggleAbLoopTracking(2),
                 onInput: () => _editTime(
                   context: context,
                   title: '设置终点 B',
                   initial: controller.abLoopEnd.value,
-                  onConfirm: (v) => controller.setAbLoopEnd(v),
+                  onConfirm: controller.setAbLoopEnd,
                 ),
-                onClear: () => controller.abLoopEnd.value = -1,
+                onUseCurrent: controller.setAbLoopEnd,
+                onClear: () {
+                  controller.abLoopEnd.value = -1;
+                  if (controller.abLoopTracking.value == 2) {
+                    controller.abLoopTracking.value = 0;
+                  }
+                },
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             Obx(
-              () => Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: controller.abLoopReady
-                          ? controller.toggleAbLoop
-                          : null,
-                      icon: Icon(
-                        controller.abLoopEnabled.value
-                            ? Icons.pause_circle_outline
-                            : Icons.play_circle_outline,
-                        size: 18,
-                      ),
-                      label: Text(
-                        controller.abLoopEnabled.value ? '停止循环' : '开始循环',
-                      ),
-                    ),
+              () => SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: controller.abLoopReady
+                      ? controller.toggleAbLoop
+                      : null,
+                  icon: Icon(
+                    controller.abLoopEnabled.value
+                        ? Icons.stop_circle_outlined
+                        : Icons.play_circle_outline,
+                    size: 18,
                   ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    onPressed: () {
-                      controller.clearAbLoop();
-                      Get.back();
-                    },
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    label: const Text('清除'),
-                  ),
-                ],
+                  label: Text(controller.abLoopEnabled.value ? '停止' : '开始'),
+                ),
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Obx(
-              () => controller.abLoopReady
-                  ? Text(
-                      '循环区间：${_fmt(controller.abLoopStart.value)} - ${_fmt(controller.abLoopEnd.value)}',
-                      style: theme.textTheme.bodySmall,
-                    )
-                  : Text(
-                      '提示：播放到起点后点击「当前」，再播放到终点点击「当前」即可',
-                      style: theme.textTheme.bodySmall,
-                    ),
+              () => Text(
+                controller.abLoopReady
+                    ? '循环区间：${_fmt(controller.abLoopStart.value)} - ${_fmt(controller.abLoopEnd.value)}'
+                    : '提示：点击「起点 A」/「终点 B」按钮进入追踪模式，拖动进度条选取；也可点击时间手动输入',
+                style: theme.textTheme.bodySmall,
+              ),
             ),
           ],
         ),
@@ -221,60 +218,78 @@ class _AbLoopSheet extends StatelessWidget {
   }
 
   Widget _buildPointRow(
-    BuildContext context,
-    ThemeData theme, {
+    BuildContext context, {
     required String label,
+    required bool tracking,
     required int value,
-    required VoidCallback onUseCurrent,
+    required VoidCallback onToggleTracking,
     required VoidCallback onInput,
+    required VoidCallback onUseCurrent,
     required VoidCallback onClear,
   }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Row(
       children: [
-        SizedBox(
-          width: 54,
-          child: Text(label, style: theme.textTheme.bodyMedium),
+        InkWell(
+          onTap: onToggleTracking,
+          borderRadius: const BorderRadius.all(Radius.circular(8)),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: tracking
+                  ? colorScheme.primaryContainer
+                  : colorScheme.surfaceContainerHighest,
+              borderRadius: const BorderRadius.all(Radius.circular(8)),
+              border: Border.all(
+                color: tracking ? colorScheme.primary : Colors.transparent,
+              ),
+            ),
+            child: Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: tracking
+                    ? colorScheme.onPrimaryContainer
+                    : colorScheme.onSurface,
+                fontWeight: tracking ? FontWeight.w600 : null,
+              ),
+            ),
+          ),
         ),
+        const SizedBox(width: 6),
         Expanded(
           child: InkWell(
             onTap: onInput,
             borderRadius: const BorderRadius.all(Radius.circular(8)),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest,
+                color: colorScheme.surfaceContainerHighest,
                 borderRadius: const BorderRadius.all(Radius.circular(8)),
               ),
               child: Row(
                 children: [
                   Icon(
                     Icons.schedule,
-                    size: 16,
-                    color: theme.colorScheme.outline,
+                    size: 14,
+                    color: colorScheme.onSurfaceVariant,
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
                   Text(
-                    value < 0
-                        ? '未设置（点击输入）'
-                        : DurationUtils.formatDuration(value),
-                    style: const TextStyle(fontSize: 15),
+                    _fmt(value),
+                    style: theme.textTheme.labelLarge,
                   ),
                 ],
               ),
             ),
           ),
         ),
-        const SizedBox(width: 6),
         TextButton(
           onPressed: onUseCurrent,
           child: const Text('当前'),
         ),
-        IconButton(
-          tooltip: '清除',
-          visualDensity: VisualDensity.compact,
-          onPressed: onClear,
-          icon: const Icon(Icons.backspace_outlined, size: 18),
-        ),
+        TextButton(onPressed: onClear, child: const Text('清除')),
       ],
     );
   }

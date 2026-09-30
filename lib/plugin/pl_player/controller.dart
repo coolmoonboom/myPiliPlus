@@ -388,6 +388,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   final RxInt abLoopStart = (-1).obs;
   // 终点，单位：秒，-1 表示未设置
   final RxInt abLoopEnd = (-1).obs;
+  // 配置卡片是否展示（播放器内嵌 overlay，非模态，进度条可拖动且不收起）
+  final RxBool abLoopPanelShown = false.obs;
+  // 追踪模式：0 关闭，1 追踪起点 A，2 追踪终点 B；
+  // 追踪时拖动进度条或正常播放都会实时写入对应点位
+  final RxInt abLoopTracking = 0.obs;
 
   bool get abLoopReady =>
       abLoopStart.value >= 0 && abLoopEnd.value > abLoopStart.value;
@@ -966,7 +971,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
           this.position.value = posInSeconds;
 
-          _handleAbLoop(posInSeconds);
+          handleAbLoopPosition(posInSeconds);
 
           makeHeartBeat(posInSeconds);
         }
@@ -1544,6 +1549,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       SmartDialog.showToast('请先设置起点与终点');
       return;
     }
+    if (enabled) {
+      abLoopTracking.value = 0;
+    }
     abLoopEnabled.value = enabled;
     if (enabled && position.value < abLoopStart.value) {
       seekTo(Duration(seconds: abLoopStart.value), isSeek: false);
@@ -1552,10 +1560,49 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   void toggleAbLoop() => setAbLoopEnabled(!abLoopEnabled.value);
 
+  void toggleAbLoopPanel() {
+    abLoopPanelShown.value = !abLoopPanelShown.value;
+    if (!abLoopPanelShown.value) {
+      abLoopTracking.value = 0;
+    }
+  }
+
+  /// 切换某个点位的追踪模式；追踪期间拖动进度条/播放会实时更新该点位
+  void toggleAbLoopTracking(int which) {
+    abLoopTracking.value = abLoopTracking.value == which ? 0 : which;
+  }
+
+  /// 追踪模式下写入点位（来自进度条拖动或播放位置流）
+  void applyAbLoopTrack(int posInSeconds) {
+    if (abLoopEnabled.value) {
+      return;
+    }
+    final which = abLoopTracking.value;
+    if (which == 0) {
+      return;
+    }
+    final pos = posInSeconds.clamp(0, durationInMilliseconds ~/ 1000);
+    if (which == 1) {
+      abLoopStart.value = pos;
+      if (abLoopEnd.value >= 0 && abLoopEnd.value <= pos) {
+        abLoopEnd.value = -1;
+      }
+    } else {
+      abLoopEnd.value = pos;
+    }
+  }
+
+  /// 播放位置流统一入口：先处理追踪写点，再处理循环回跳
+  void handleAbLoopPosition(int posInSeconds) {
+    applyAbLoopTrack(posInSeconds);
+    _handleAbLoop(posInSeconds);
+  }
+
   void clearAbLoop() {
     abLoopEnabled.value = false;
     abLoopStart.value = -1;
     abLoopEnd.value = -1;
+    abLoopTracking.value = 0;
     _abLoopSeeking = false;
   }
 
