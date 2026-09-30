@@ -224,16 +224,46 @@ void _setupErrorVisualization() {
     FlutterError.presentError(details);
   };
   ErrorWidget.builder = (details) {
-    return ErrorPanel(exception: details.exception, stack: details.stack);
+    return ErrorPanel(
+      exception: details.exception,
+      stack: details.stack,
+      elementChain: describeElementChain(details.context),
+    );
   };
 }
 
-/// 渲染 build 异常的可视化面板：异常信息 + 前若干帧调用栈。
+/// 从抛错 Element 向上枚举祖先 widget 类型，用于精确定位是哪个组件抛出 build 异常。
+String describeElementChain(BuildContext? ctx) {
+  if (ctx == null) return '(无 Element 上下文)';
+  final types = <String>[];
+  dynamic node = ctx;
+  var guard = 0;
+  while (node != null && guard++ < 60) {
+    try {
+      types.add(node.widget.runtimeType.toString());
+    } catch (_) {
+      break;
+    }
+    try {
+      node = node.parent;
+    } catch (_) {
+      break;
+    }
+  }
+  return types.isEmpty ? '(无法枚举元素链)' : types.join('\n  |> ');
+}
+
+/// 渲染 build 异常的可视化面板：异常信息 + 元素树定位 + 前若干帧调用栈。
 class ErrorPanel extends StatelessWidget {
-  const ErrorPanel({required this.exception, required this.stack});
+  const ErrorPanel({
+    required this.exception,
+    required this.stack,
+    required this.elementChain,
+  });
 
   final Object exception;
   final StackTrace? stack;
+  final String elementChain;
 
   @override
   Widget build(BuildContext context) {
@@ -258,6 +288,34 @@ class ErrorPanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
+              const Text(
+                '【元素树定位】（从抛错处向上）',
+                style: TextStyle(
+                  color: Color(0xFFB00020),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                elementChain,
+                style: const TextStyle(
+                  color: Color(0xFF1565C0),
+                  fontSize: 12,
+                  height: 1.35,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '【异常原文 + 调用栈】',
+                style: TextStyle(
+                  color: Color(0xFFB00020),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 4),
               Expanded(
                 child: SingleChildScrollView(
                   child: Text(
