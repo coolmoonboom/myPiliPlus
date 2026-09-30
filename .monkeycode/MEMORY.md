@@ -68,3 +68,11 @@ Entries discovered by the Agent during task execution should follow this format:
   - CI 改单 abi 后用 `flutter build apk --target-platform android-arm64`（不带 --split-per-abi），产物是 fat `app-release.apk`，不是 `app-<abi>-release.apk`
   - build.yml Rename 步骤从 `build/app/outputs/flutter-apk` 上跳 4 级才到仓库根；softprops 的 files 通配符在仓库根匹配，匹配不到只打 warning 不报错（会得到空 assets 的 Release）
   - AndroidHelper.java（Java 源）留在旧包 com.example.piliplus 时引用 R 需显式 `import com.example.piliplusfr.R;`
+
+[改应用包名的 Android 配套坑]
+- Date: 2026-09-30
+- Context: Discovered by Agent while fixing 2.2.1 startup crash
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 改 namespace/applicationId 但 Kotlin/Java 源码留旧包时，manifest 中所有相对类名（.MainActivity、.BiliDocumentsProvider 等）必须改成旧包全限定名，否则启动即 ClassNotFoundException 闪退
+  - 本项目 JNI（ffigen bindings.g.dart）按 com/example/piliplus/... FindClass，源码包名不可轻改；applicationId 可与源码包名不同
