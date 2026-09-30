@@ -98,6 +98,12 @@ jobs:
               shell: pwsh
               run: lib/scripts/build.ps1 android
 
+            - name: Accept Android SDK licenses and install NDK
+              shell: bash
+              run: |
+                  yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+                  "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13113456"
+
             - name: Flutter Build Release Apk
               if: ${{ github.event_name == 'workflow_dispatch' }}
               run: flutter build apk --release --split-per-abi --dart-define-from-file=pili_release.json --no-pub
