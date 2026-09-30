@@ -31,6 +31,7 @@ import 'package:PiliPlus/pages/danmaku/danmaku_model.dart';
 import 'package:PiliPlus/pages/live_room/widgets/bottom_control.dart'
     as live_bottom;
 import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/pages/video/local_subtitle/view.dart';
 import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
 import 'package:PiliPlus/pages/video/post_panel/popup_menu_text.dart';
 import 'package:PiliPlus/pages/video/post_panel/view.dart';
@@ -695,15 +696,25 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
       /// 字幕
       BottomControlType.subtitle => Obx(
         () {
-          if (videoDetailController.subtitles.isNotEmpty) {
-            final val = videoDetailController.vttSubtitlesIndex.value;
-            return PopupMenuButton<int>(
-              tooltip: '字幕',
-              requestFocus: false,
-              initialValue: val,
-              color: Colors.black.withValues(alpha: 0.8),
-              itemBuilder: (context) {
-                return [
+          final subs = videoDetailController.subtitles;
+          final val = videoDetailController.vttSubtitlesIndex.value;
+          void toLocalSubtitlePage() {
+            Get.to(
+              () => LocalSubtitleView(
+                plPlayerController: plPlayerController,
+                videoDetailController: videoDetailController,
+              ),
+            );
+          }
+
+          return PopupMenuButton<int>(
+            tooltip: '字幕',
+            requestFocus: false,
+            initialValue: val,
+            color: Colors.black.withValues(alpha: 0.8),
+            itemBuilder: (context) {
+              return [
+                if (subs.isNotEmpty) ...[
                   PopupMenuItem<int>(
                     value: 0,
                     height: 35,
@@ -716,7 +727,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                       ),
                     ),
                   ),
-                  ...videoDetailController.subtitles.mapIndexed((i, e) {
+                  ...subs.mapIndexed((i, e) {
                     return PopupMenuItem<int>(
                       value: i + 1,
                       height: 35,
@@ -729,26 +740,38 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                       ),
                     );
                   }),
-                ];
-              },
-              child: SizedBox(
-                width: widgetWidth,
-                height: 30,
-                child: val == 0
-                    ? const Icon(
-                        Icons.closed_caption_off_outlined,
-                        size: 22,
-                        color: Colors.white,
-                      )
-                    : const Icon(
-                        Icons.closed_caption_off_rounded,
-                        size: 22,
-                        color: Colors.white,
-                      ),
-              ),
-            );
-          }
-          return const SizedBox.shrink();
+                  const PopupMenuDivider(),
+                ],
+                PopupMenuItem<int>(
+                  value: -1,
+                  height: 35,
+                  onTap: toLocalSubtitlePage,
+                  child: const Text(
+                    '本地法语字幕（离线识别）',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ];
+            },
+            child: SizedBox(
+              width: widgetWidth,
+              height: 30,
+              child: subs.isEmpty || val == 0
+                  ? const Icon(
+                      Icons.closed_caption_off_outlined,
+                      size: 22,
+                      color: Colors.white,
+                    )
+                  : const Icon(
+                      Icons.closed_caption_off_rounded,
+                      size: 22,
+                      color: Colors.white,
+                    ),
+            ),
+          );
         },
       ),
 

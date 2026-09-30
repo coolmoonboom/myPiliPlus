@@ -90,7 +90,9 @@ class _AbLoopSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Material(
+      clipBehavior: Clip.hardEdge,
       color: theme.colorScheme.surface,
+      borderRadius: const BorderRadius.all(Radius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
         child: Column(
@@ -207,9 +209,9 @@ class _AbLoopSheet extends StatelessWidget {
                       '循环区间：${_fmt(controller.abLoopStart.value)} - ${_fmt(controller.abLoopEnd.value)}',
                       style: theme.textTheme.bodySmall,
                     )
-                  : const Text(
+                  : Text(
                       '提示：播放到起点后点击「当前」，再播放到终点点击「当前」即可',
-                      style: TextStyle(fontSize: 12),
+                      style: theme.textTheme.bodySmall,
                     ),
             ),
           ],
