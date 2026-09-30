@@ -381,6 +381,17 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   // 播放顺序相关
   late PlayRepeat playRepeat = Pref.playRepeat;
 
+  // 指定片段循环 (AB 循环)
+  // 是否启用片段循环
+  final RxBool abLoopEnabled = false.obs;
+  // 起点，单位：秒，-1 表示未设置
+  final RxInt abLoopStart = (-1).obs;
+  // 终点，单位：秒，-1 表示未设置
+  final RxInt abLoopEnd = (-1).obs;
+
+  bool get abLoopReady =>
+      abLoopStart.value >= 0 && abLoopEnd.value > abLoopStart.value;
+
   TextStyle get subTitleStyle => TextStyle(
     height: 1.5,
     fontSize:
@@ -612,6 +623,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       this.width = width;
       this.height = height;
       this.dataSource = dataSource;
+      clearAbLoop();
       _autoPlay = autoplay;
       // 初始化数据加载状态
       dataStatus.value = DataStatus.loading;
@@ -953,6 +965,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           }
 
           this.position.value = posInSeconds;
+
+          _handleAbLoop(posInSeconds);
 
           makeHeartBeat(posInSeconds);
         }
@@ -1503,6 +1517,69 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   void setPlayRepeat(PlayRepeat type) {
     playRepeat = type;
     if (!tempPlayerConf) video.put(VideoBoxKey.playRepeat, type.index);
+  }
+
+  /// 设置片段循环起点；[seconds] 为空时使用当前播放位置
+  void setAbLoopStart([int? seconds]) {
+    final raw = seconds ?? position.value;
+    abLoopStart.value = raw.clamp(0, durationInMilliseconds ~/ 1000);
+    if (abLoopEnd.value >= 0 && abLoopEnd.value <= abLoopStart.value) {
+      abLoopEnd.value = -1;
+    }
+  }
+
+  /// 设置片段循环终点；[seconds] 为空时使用当前播放位置
+  void setAbLoopEnd([int? seconds]) {
+    final raw = seconds ?? position.value;
+    final pos = raw.clamp(0, durationInMilliseconds ~/ 1000);
+    if (abLoopStart.value >= 0 && pos <= abLoopStart.value) {
+      SmartDialog.showToast('终点需大于起点');
+      return;
+    }
+    abLoopEnd.value = pos;
+  }
+
+  void setAbLoopEnabled(bool enabled) {
+    if (enabled && !abLoopReady) {
+      SmartDialog.showToast('请先设置起点与终点');
+      return;
+    }
+    abLoopEnabled.value = enabled;
+    if (enabled && position.value < abLoopStart.value) {
+      seekTo(Duration(seconds: abLoopStart.value), isSeek: false);
+    }
+  }
+
+  void toggleAbLoop() => setAbLoopEnabled(!abLoopEnabled.value);
+
+  void clearAbLoop() {
+    abLoopEnabled.value = false;
+    abLoopStart.value = -1;
+    abLoopEnd.value = -1;
+    _abLoopSeeking = false;
+  }
+
+  bool _abLoopSeeking = false;
+
+  void _handleAbLoop(int posInSeconds) {
+    if (!abLoopEnabled.value) {
+      return;
+    }
+    final a = abLoopStart.value;
+    final b = abLoopEnd.value;
+    if (a < 0 || b <= a) {
+      return;
+    }
+    if (posInSeconds <= a) {
+      _abLoopSeeking = false;
+      return;
+    }
+    if (posInSeconds >= b && !_abLoopSeeking) {
+      _abLoopSeeking = true;
+      seekTo(Duration(seconds: a), isSeek: false).whenComplete(() {
+        _abLoopSeeking = false;
+      });
+    }
   }
 
   void putSubtitleSettings() {

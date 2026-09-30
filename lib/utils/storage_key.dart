@@ -183,6 +183,12 @@ abstract final class SettingBoxKey {
       webdavPassword = 'webdavPassword',
       webdavDirectory = 'webdavDirectory';
 
+  static const String whisperModel = 'whisperModel',
+      whisperBilingual = 'whisperBilingual',
+      translationProvider = 'translationProvider',
+      translationEndpoint = 'translationEndpoint',
+      translationApiKey = 'translationApiKey';
+
   static const String enableSponsorBlock = 'enableSponsorBlock',
       blockSettings = 'blockSettings',
       blockLimit = 'blockLimit',

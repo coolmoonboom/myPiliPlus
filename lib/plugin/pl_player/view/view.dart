@@ -43,6 +43,7 @@ import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/gesture_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/app_bar_ani.dart';
+import 'package:PiliPlus/plugin/pl_player/widgets/ab_loop_sheet.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/backward_seek.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/bottom_control.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/common_btn.dart';
@@ -751,6 +752,29 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
         },
       ),
 
+      /// 片段循环
+      BottomControlType.abLoop => Obx(() {
+        final enabled = plPlayerController.abLoopEnabled.value;
+        final ready = plPlayerController.abLoopReady;
+        return ComBtn(
+          width: widgetWidth,
+          height: 30,
+          tooltip: enabled ? '片段循环中' : '片段循环',
+          icon: Icon(
+            Icons.repeat,
+            size: 22,
+            color: enabled
+                ? colorScheme.primary
+                : (ready ? Colors.white : const Color(0x62FFFFFF)),
+          ),
+          onTap: () => showAbLoopSheet(context, plPlayerController),
+          onLongPress: () {
+            Feedback.forLongPress(context);
+            plPlayerController.toggleAbLoop();
+          },
+        );
+      }),
+
       /// 播放速度
       BottomControlType.speed => Obx(
         () => PopupMenuButton<double>(
@@ -896,6 +920,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
       if (isNotFileSource && anySeason) .episode,
       if (flag) .fit,
       if (isNotFileSource) .aiTranslate,
+      .abLoop,
       .subtitle,
       .speed,
       if (isNotFileSource && flag) .qa,

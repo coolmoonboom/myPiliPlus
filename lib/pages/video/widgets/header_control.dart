@@ -34,6 +34,7 @@ import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/widgets/action_item.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/widgets/menu_row.dart';
+import 'package:PiliPlus/pages/video/local_subtitle/view.dart';
 import 'package:PiliPlus/pages/video/widgets/header_mixin.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
@@ -396,6 +397,23 @@ class HeaderControlState extends State<HeaderControl>
                     leading: const Icon(Icons.note_alt_outlined, size: 20),
                     title: const Text('查看笔记', style: titleStyle),
                   ),
+                ListTile(
+                  dense: true,
+                  onTap: () {
+                    Get.back();
+                    Get.to(
+                      () => LocalSubtitleView(
+                        plPlayerController: plPlayerController,
+                        videoDetailController: videoDetailCtr,
+                      ),
+                    );
+                  },
+                  leading: const Icon(
+                    Icons.closed_caption_outlined,
+                    size: 20,
+                  ),
+                  title: const Text('本地法语字幕（离线识别+双语）', style: titleStyle),
+                ),
                 if (!isFileSource)
                   ListTile(
                     dense: true,

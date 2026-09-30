@@ -1074,6 +1074,14 @@ class VideoDetailController extends GetxController
     await setSub(subtitle);
   }
 
+  /// 追加一条本地生成的字幕轨道（如本地法语识别字幕）并切换显示
+  Future<void> addSubtitleTrack(Subtitle sub, String vtt) async {
+    final idx = subtitles.length;
+    subtitles.add(sub);
+    vttSubtitles[idx] = (isData: true, id: vtt);
+    await setSubtitle(idx + 1);
+  }
+
   // interactive video
   int? graphVersion;
   EdgeInfoData? steinEdgeInfo;
