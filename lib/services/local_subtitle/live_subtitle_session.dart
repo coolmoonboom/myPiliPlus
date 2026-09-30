@@ -23,7 +23,7 @@ class LiveSubtitleSession extends GetxController {
     required this.videoDetailController,
     required ModelManager modelManager,
   }) : _modelManager = modelManager {
-    _sub = plPlayerController.positionStream.listen(_onPosition);
+    _sub = plPlayerController.position.stream.listen(_onPosition);
   }
 
   final PlPlayerController plPlayerController;
@@ -40,6 +40,13 @@ class LiveSubtitleSession extends GetxController {
   int _injectTrack = 0;
   Timer? _injectTimer;
   bool _closed = false;
+
+  static final RxList<LocalSubtitleSegment> _emptySegments =
+      <LocalSubtitleSegment>[].obs;
+
+  /// 当前已识别出的分段（增量刷新，供字幕面板监听展示）
+  RxList<LocalSubtitleSegment> get segments =>
+      _recognizer?.segments ?? _emptySegments;
 
   Stream<int> get positionStream => plPlayerController.position.stream;
 
@@ -173,11 +180,21 @@ class LiveSubtitleSession extends GetxController {
     await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
   }
 
+  /// 释放会话：停止识别、取消 position 订阅。由外部生命周期回调调用。
+  void shutdown() {
+    _closed = true;
+    _injectTimer?.cancel();
+    _injectTimer = null;
+    _recognizer?.stop();
+    _recognizer = null;
+    _sub?.cancel();
+    _sub = null;
+    running.value = false;
+  }
+
   @override
   void onClose() {
-    _closed = true;
-    stop();
-    _sub?.cancel();
+    shutdown();
     super.onClose();
   }
 }

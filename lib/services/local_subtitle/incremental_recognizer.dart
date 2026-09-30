@@ -97,7 +97,7 @@ class IncrementalRecognizer extends GetxController {
   Future<void> _prepare() async {
     // 探测 Range 支持与 init segment 边界（第一个 moof 出现的位置）
     const probe = 65536;
-    final probeRes = await Request().dio.get<List<int>>(
+    final probeRes = await Request.dio.get<List<int>>(
       audioUrl,
       options: Options(
         responseType: ResponseType.bytes,
@@ -121,7 +121,7 @@ class IncrementalRecognizer extends GetxController {
     var initLen = moof;
     if (initLen < 0) {
       // moov 可能超出探针范围，扩大探测
-      final res = await Request().dio.get<List<int>>(
+      final res = await Request.dio.get<List<int>>(
         audioUrl,
         options: Options(
           responseType: ResponseType.bytes,
@@ -165,7 +165,7 @@ class IncrementalRecognizer extends GetxController {
         if (_cancelled) {
           break;
         }
-        if (positionProvider?.call() ?? 0 > chunkEnd) {
+        if ((positionProvider?.call() ?? 0) > chunkEnd) {
           _nextChunkStart = chunkEnd;
           continue;
         }
@@ -197,7 +197,7 @@ class IncrementalRecognizer extends GetxController {
     final b0 = (s0 * bps).round();
     final b1 = (s1 * bps).round();
     final rangeEnd = b1 + tailExtra;
-    final res = await Request().dio.get<List<int>>(
+    final res = await Request.dio.get<List<int>>(
       audioUrl,
       cancelToken: _cancelToken,
       options: Options(

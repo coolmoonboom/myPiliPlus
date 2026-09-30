@@ -52,14 +52,14 @@ class ModelManager {
 
   Future<void> _initStates() async {
     for (final model in managedModels) {
-      final path = await WhisperController.getPath(model);
+      final path = await WhisperController().getPath(model);
       if (await File(path).exists()) {
         states[_key(model)] = ModelState.downloaded;
       }
     }
   }
 
-  Future<String> pathOf(WhisperModel model) => WhisperController.getPath(model);
+  Future<String> pathOf(WhisperModel model) => WhisperController().getPath(model);
 
   Future<String> _partPath(WhisperModel model) async =>
       '${await pathOf(model)}.part';
@@ -128,12 +128,11 @@ class ModelManager {
       received: received,
     );
     try {
-      final response = await Request().dio.get<ResponseBody>(
+      final response = await Request.dio.get<ResponseBody>(
         model.modelUri.toString(),
         cancelToken: cancelToken,
         options: Options(
           responseType: ResponseType.stream,
-          followRedirects: false,
           headers: {if (received > 0) 'Range': 'bytes=$received-'},
           validateStatus: (status) => status == 206 || status == 200,
         ),
@@ -158,7 +157,7 @@ class ModelManager {
       int lastTick = DateTime.now().millisecondsSinceEpoch;
       final sub = response.data!.stream.listen((chunk) {
         sink.add(chunk);
-        received += chunk.length;
+        received += chunk.length.toInt();
         final now = DateTime.now().millisecondsSinceEpoch;
         if (now - lastTick > 250) {
           lastTick = now;
@@ -175,9 +174,6 @@ class ModelManager {
         await sink.flush();
         await sink.close();
       }
-      if (CancelToken.isCancel(cancelToken)) {
-        return;
-      }
       if (total > 0 && received < total) {
         throw '下载不完整';
       }
@@ -188,7 +184,7 @@ class ModelManager {
         total: -1,
       );
     } on DioException catch (e) {
-      if (CancelToken.isCancel(cancelToken)) {
+      if (e.type == DioExceptionType.cancel) {
         // pause() 已写入 paused 状态；主动取消则回到空闲
         final state = states[key];
         if (state?.state == ModelTaskState.downloading) {
@@ -227,8 +223,8 @@ class ModelManager {
     }
     states[key] = ModelState(
       state: ModelTaskState.paused,
-      received: current.received,
-      total: current.total,
+      received: current!.received,
+      total: current!.total,
     );
     _cancelTokens[key]?.cancel('paused');
   }

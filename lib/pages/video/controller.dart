@@ -78,7 +78,6 @@ import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart'
     show ExtendedNestedScrollViewState;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show compute, kDebugMode;
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:get/get.dart';
@@ -1338,7 +1337,7 @@ class VideoDetailController extends GetxController
       ..dispose();
     subtitles.clear();
     vttSubtitles.clear();
-    _liveSubtitleSession?.close();
+    _liveSubtitleSession?.shutdown();
     _liveSubtitleSession = null;
     super.onClose();
   }
