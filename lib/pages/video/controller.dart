@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' show min;
 import 'dart:ui';
 
@@ -61,8 +63,12 @@ import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
+import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
+import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:PiliPlus/utils/subtitle_utils.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:PiliPlus/utils/video_utils.dart';
@@ -70,7 +76,9 @@ import 'package:collection/collection.dart';
 import 'package:dio/dio.dart' show Options;
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart'
     show ExtendedNestedScrollViewState;
-import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show compute, kDebugMode;
+import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:get/get.dart';
@@ -1034,6 +1042,17 @@ class VideoDetailController extends GetxController
 
   RxList<Subtitle> subtitles = RxList<Subtitle>();
   final Map<int, ({bool isData, String id})> vttSubtitles = {};
+
+  LiveSubtitleSession? _liveSubtitleSession;
+
+  /// 增量字幕识别会话（懒创建，跨竖屏字幕页/横屏设置共享）
+  LiveSubtitleSession get liveSubtitleSession =>
+      _liveSubtitleSession ??= LiveSubtitleSession(
+        plPlayerController: plPlayerController,
+        videoDetailController: this,
+        modelManager: ModelManager.instance,
+      );
+
   late final vttSubtitlesIndex = (-1).obs;
   late final showVP = true.obs;
   late final viewPointList = <ViewPointSegment>[].obs;
@@ -1080,6 +1099,58 @@ class VideoDetailController extends GetxController
     subtitles.add(sub);
     vttSubtitles[idx] = (isData: true, id: vtt);
     await setSubtitle(idx + 1);
+  }
+
+  /// 更新一条本地生成字幕轨道的 VTT 内容（增量识别时反复更新）
+  Future<void> updateSubtitleTrack(int index, String vtt) async {
+    final idx = index - 1;
+    if (idx < 0 || idx >= subtitles.length) {
+      return;
+    }
+    vttSubtitles[idx] = (isData: true, id: vtt);
+    if (vttSubtitlesIndex.value == index) {
+      await setSubtitle(index);
+    }
+  }
+
+  /// 从本地文件导入字幕（.srt / .vtt 等），导入后立即在播放器显示。
+  /// 复用播放器字幕设置里的加载逻辑。
+  Future<void> importSubtitleFile(BuildContext context) async {
+    try {
+      final result = await FilePicker.pickFile(
+        type: FileType.custom,
+        allowedExtensions: const ['json', 'vtt', 'srt', 'ass', 'bcc'],
+      );
+      if (result == null) {
+        return;
+      }
+      final file = result.xFile;
+      final path = file.path;
+      final name = file.name;
+      final length = subtitles.length;
+      if (name.endsWith('.json') || name.endsWith('.bcc')) {
+        final stream = File(path).openRead().transform(utf8.decoder);
+        final buffer = StringBuffer();
+        await for (final chunk in stream) {
+          buffer.write(chunk);
+        }
+        final sub = await compute<List, String>(
+          SubtitleUtils.json2Vtt,
+          jsonDecode(buffer.toString())['body'],
+        );
+        vttSubtitles[length] = (isData: true, id: sub);
+      } else if (name.endsWith('.vtt')) {
+        vttSubtitles[length] = (isData: false, id: path);
+      } else {
+        vttSubtitles[length] = (isData: false, id: path);
+      }
+      subtitles.add(
+        Subtitle(lan: '', lanDoc: name.split('.').firstOrNull ?? name),
+      );
+      await setSubtitle(length + 1);
+    } catch (e) {
+      SmartDialog.showToast('加载失败: $e');
+    }
   }
 
   // interactive video
@@ -1267,6 +1338,8 @@ class VideoDetailController extends GetxController
       ..dispose();
     subtitles.clear();
     vttSubtitles.clear();
+    _liveSubtitleSession?.close();
+    _liveSubtitleSession = null;
     super.onClose();
   }
 

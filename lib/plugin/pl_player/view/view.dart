@@ -31,7 +31,7 @@ import 'package:PiliPlus/pages/danmaku/danmaku_model.dart';
 import 'package:PiliPlus/pages/live_room/widgets/bottom_control.dart'
     as live_bottom;
 import 'package:PiliPlus/pages/video/controller.dart';
-import 'package:PiliPlus/pages/video/local_subtitle/view.dart';
+import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
 import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
 import 'package:PiliPlus/pages/video/post_panel/popup_menu_text.dart';
 import 'package:PiliPlus/pages/video/post_panel/view.dart';
@@ -699,9 +699,11 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           final subs = videoDetailController.subtitles;
           final val = videoDetailController.vttSubtitlesIndex.value;
           void toLocalSubtitlePage() {
-            Get.to(
-              () => LocalSubtitleView(
-                plPlayerController: plPlayerController,
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              builder: (_) => AiSubtitleSettingsSheet(
                 videoDetailController: videoDetailController,
               ),
             );
@@ -1702,11 +1704,10 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
         //   ),
         // ),
         Obx(
-          () => plPlayerController.abLoopPanelShown.value
+          () => plPlayerController.abLoopPanelShown.value &&
+                  (isFullScreen || maxWidth > maxHeight)
               ? Align(
-                  alignment: (isFullScreen || maxWidth > maxHeight)
-                      ? Alignment.centerLeft
-                      : Alignment.bottomCenter,
+                  alignment: Alignment.centerLeft,
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
                       12,
@@ -2072,6 +2073,21 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           }),
       ],
     );
+    // 竖屏（非全屏）时 AB 循环卡片移到视频下方显示，避免遮挡画面。
+    final Widget result = Obx(() {
+      final showPortraitAbCard = !isFullScreen &&
+          maxWidth < maxHeight &&
+          plPlayerController.abLoopPanelShown.value;
+      if (!showPortraitAbCard) {
+        return child;
+      }
+      return Column(
+        children: [
+          Expanded(child: child),
+          _abPortraitCard(),
+        ],
+      );
+    });
     if (PlatformUtils.isDesktop) {
       return Obx(
         () => MouseRegion(
@@ -2082,11 +2098,29 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           onHover: (_) => plPlayerController.controls = true,
           onExit: (_) => plPlayerController.controls =
               widget.videoDetailController?.showSteinEdgeInfo.value ?? false,
-          child: child,
+          child: result,
         ),
       );
     }
-    return child;
+    return result;
+  }
+
+  /// 竖屏模式下置于视频下方的 AB 循环卡片条。
+  Widget _abPortraitCard() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHigh,
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: math.max(120, maxHeight * 0.3)),
+        child: AbLoopCard(controller: plPlayerController),
+      ),
+    );
   }
 
   Widget get _videoWidget {

@@ -163,13 +163,14 @@ abstract final class LocalSubtitleService {
 
     if (bilingual) {
       onStage?.call('翻译中');
-      segments = await _translateSegments(segments);
+      segments = await translateSegments(segments);
     }
 
     return Success(segments);
   }
 
-  static Future<List<LocalSubtitleSegment>> _translateSegments(
+  /// 为分段列表生成中文翻译（逐段并发），供增量识别复用。
+  static Future<List<LocalSubtitleSegment>> translateSegments(
     List<LocalSubtitleSegment> segments,
   ) async {
     final translator = TranslationService.create();
@@ -213,4 +214,38 @@ abstract final class LocalSubtitleService {
     lanDoc: bilingual ? '法语字幕（本地·双语）' : '法语字幕（本地）',
     isAi: true,
   );
+
+  /// 将分段构建为标准 SRT 文本，用于导出/分享字幕文件。
+  static String buildSrt(List<LocalSubtitleSegment> segments) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < segments.length; i++) {
+      final s = segments[i];
+      buffer
+        ..writeln(i + 1)
+        ..writeln(_fmtSrt(s.from, s.to))
+        ..writeln(
+          s.translated == null || s.translated!.isEmpty
+              ? s.text
+              : '${s.text}\n${s.translated}',
+        )
+        ..writeln();
+    }
+    return buffer.toString();
+  }
+
+  static String _fmtSrt(double from, double to) {
+    String ts(double t) {
+      final ms = (t * 1000).round();
+      final h = ms ~/ 3600000;
+      final m = (ms % 3600000) ~/ 60000;
+      final s = (ms % 60000) ~/ 1000;
+      final ml = ms % 1000;
+      return '${h.toString().padLeft(2, '0')}:'
+          '${m.toString().padLeft(2, '0')}:'
+          '${s.toString().padLeft(2, '0')},'
+          '${ml.toString().padLeft(3, '0')}';
+    }
+
+    return '${ts(from)} --> ${ts(to)}';
+  }
 }

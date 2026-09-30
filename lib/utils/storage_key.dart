@@ -185,6 +185,7 @@ abstract final class SettingBoxKey {
 
   static const String whisperModel = 'whisperModel',
       whisperBilingual = 'whisperBilingual',
+      whisperFollowPlayback = 'whisperFollowPlayback',
       translationProvider = 'translationProvider',
       translationEndpoint = 'translationEndpoint',
       translationApiKey = 'translationApiKey';

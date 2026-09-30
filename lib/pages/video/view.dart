@@ -28,6 +28,7 @@ import 'package:PiliPlus/pages/danmaku/view.dart';
 import 'package:PiliPlus/pages/episode_panel/view.dart';
 import 'package:PiliPlus/pages/video/ai_conclusion/view.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/pages/video/subtitle_ai/view.dart';
 import 'package:PiliPlus/pages/video/introduction/local/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/local/view.dart';
 import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
@@ -130,6 +131,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         (videoDetail.ugcSeason != null ||
             ((videoDetail.pages?.length ?? 0) > 1));
   }
+
+  /// 在线视频页显示「字幕」标签（AI 增量识别字幕）。
+  bool get _shouldShowSubtitleTab => !videoDetailController.isFileSource;
 
   final videoReplyPanelKey = GlobalKey();
   final videoRelatedKey = GlobalKey();
@@ -593,6 +597,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                         videoIntro(isHorizontal: false, needCtr: false),
                         if (videoDetailController.showReply)
                           videoReplyPanel(isNested: true),
+                        if (_shouldShowSubtitleTab) subtitleAiPanel,
                         if (_shouldShowSeasonPanel) seasonPanel,
                       ],
                     ),
@@ -805,6 +810,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                           height: maxHeight,
                         ),
                         if (videoDetailController.showReply) videoReplyPanel(),
+                        if (_shouldShowSubtitleTab) subtitleAiPanel,
                         if (_shouldShowSeasonPanel) seasonPanel,
                       ],
                     ),
@@ -865,6 +871,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                             children: [
                               if (videoDetailController.showReply)
                                 videoReplyPanel(),
+                              if (_shouldShowSubtitleTab) subtitleAiPanel,
                               if (_shouldShowSeasonPanel) seasonPanel,
                             ],
                           ),
@@ -968,6 +975,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                             ),
                           ),
                         if (videoDetailController.showReply) videoReplyPanel(),
+                        if (_shouldShowSubtitleTab) subtitleAiPanel,
                         if (_shouldShowSeasonPanel) seasonPanel,
                       ],
                     ),
@@ -1053,6 +1061,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                             width: () {
                               double flex = 1;
                               if (videoDetailController.showReply) flex++;
+                              if (_shouldShowSubtitleTab) flex++;
                               if (shouldShowSeasonPanel) flex++;
                               return maxWidth / flex;
                             }(),
@@ -1061,6 +1070,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                         ),
                         if (videoDetailController.showReply)
                           Expanded(child: videoReplyPanel()),
+                        if (_shouldShowSubtitleTab) Expanded(child: subtitleAiPanel),
                         if (shouldShowSeasonPanel) Expanded(child: seasonPanel),
                       ],
                     ),
@@ -1297,6 +1307,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       if (showIntro)
         videoDetailController.isFileSource ? '离线视频' : introText ?? '简介',
       if (videoDetailController.showReply) '评论',
+      if (_shouldShowSubtitleTab) '字幕',
       if (_shouldShowSeasonPanel) '播放列表',
     ];
     if (videoDetailController.tabCtr.length != tabs.length) {
@@ -1729,6 +1740,13 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       );
     }
     return KeepAliveWrapper(child: child);
+  }
+
+  /// 「字幕」标签页内容：AI 增量识别字幕（逐行滚动、双语）。
+  Widget get subtitleAiPanel {
+    return KeepAliveWrapper(
+      child: SubtitleAiPanel(videoDetailController: videoDetailController),
+    );
   }
 
   Widget get seasonPanel {
