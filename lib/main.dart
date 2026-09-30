@@ -224,50 +224,43 @@ void _setupErrorVisualization() {
     FlutterError.presentError(details);
   };
   ErrorWidget.builder = (details) {
-    return ErrorPanel(
-      exception: details.exception,
-      stack: details.stack,
-      elementChain: describeElementChain(details.context),
-    );
+    return ErrorPanel(exception: details.exception, stack: details.stack);
   };
 }
 
-/// 从抛错 Element 向上枚举祖先 widget 类型，用于精确定位是哪个组件抛出 build 异常。
-String describeElementChain(BuildContext? ctx) {
-  if (ctx == null) return '(无 Element 上下文)';
-  final types = <String>[];
-  dynamic node = ctx;
-  var guard = 0;
-  while (node != null && guard++ < 60) {
-    try {
-      types.add(node.widget.runtimeType.toString());
-    } catch (_) {
-      break;
-    }
-    try {
-      node = node.parent;
-    } catch (_) {
-      break;
-    }
-  }
-  return types.isEmpty ? '(无法枚举元素链)' : types.join('\n  |> ');
-}
-
 /// 渲染 build 异常的可视化面板：异常信息 + 元素树定位 + 前若干帧调用栈。
-class ErrorPanel extends StatelessWidget {
-  const ErrorPanel({
-    required this.exception,
-    required this.stack,
-    required this.elementChain,
-  });
+class ErrorPanel extends StatefulWidget {
+  const ErrorPanel({required this.exception, required this.stack});
 
   final Object exception;
   final StackTrace? stack;
-  final String elementChain;
+
+  @override
+  State<ErrorPanel> createState() => _ErrorPanelState();
+}
+
+class _ErrorPanelState extends State<ErrorPanel> {
+  String _ancestors = '(尚未采集)';
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final chain = <String>[];
+      context.visitAncestorElements((el) {
+        chain.add(el.widget.runtimeType.toString());
+        return true;
+      });
+      setState(() {
+        _ancestors = chain.isEmpty ? '(无可枚举祖先)' : chain.join('\n  |> ');
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final stackLines = (stack?.toString().split('\n') ?? const [])
+    final stackLines = (widget.stack?.toString().split('\n') ?? const [])
         .where((line) => line.trim().isNotEmpty)
         .take(30)
         .join('\n');
@@ -289,7 +282,7 @@ class ErrorPanel extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               const Text(
-                '【元素树定位】（从抛错处向上）',
+                '【元素树定位】（本面板替换失败的 Obx，以下是从其父级向上）',
                 style: TextStyle(
                   color: Color(0xFFB00020),
                   fontWeight: FontWeight.bold,
@@ -298,7 +291,7 @@ class ErrorPanel extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                elementChain,
+                _ancestors,
                 style: const TextStyle(
                   color: Color(0xFF1565C0),
                   fontSize: 12,
@@ -319,7 +312,7 @@ class ErrorPanel extends StatelessWidget {
               Expanded(
                 child: SingleChildScrollView(
                   child: Text(
-                    '$exception\n\n$stackLines',
+                    '${widget.exception}\n\n$stackLines',
                     style: const TextStyle(
                       color: Color(0xFF212121),
                       fontSize: 13,
