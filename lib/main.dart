@@ -91,6 +91,7 @@ Future<void> _initAppPath() async {
 
 void main() async {
   ScaledWidgetsFlutterBinding.ensureInitialized();
+  _setupErrorVisualization();
   MediaKit.ensureInitialized();
   await _initAppPath();
   try {
@@ -211,6 +212,69 @@ void main() async {
     );
   } else {
     runApp(const MyApp());
+  }
+}
+
+/// 将 build/layout 等渲染期异常直接渲染到屏幕上（白屏调试用），
+/// 同时保留控制台日志。定位完成后可移除。
+void _setupErrorVisualization() {
+  FlutterError.onError = (details) {
+    debugPrint('FlutterError: ${details.exceptionAsString()}');
+    debugPrint('${details.stack}');
+    FlutterError.presentError(details);
+  };
+  ErrorWidget.builder = (details) {
+    return ErrorPanel(exception: details.exception, stack: details.stack);
+  };
+}
+
+/// 渲染 build 异常的可视化面板：异常信息 + 前若干帧调用栈。
+class ErrorPanel extends StatelessWidget {
+  const ErrorPanel({required this.exception, required this.stack});
+
+  final Object exception;
+  final StackTrace? stack;
+
+  @override
+  Widget build(BuildContext context) {
+    final stackLines = (stack?.toString().split('\n') ?? const [])
+        .where((line) => line.trim().isNotEmpty)
+        .take(30)
+        .join('\n');
+    return ColoredBox(
+      color: const Color(0xFFFFF7E6),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'build 异常（调试信息）',
+                style: TextStyle(
+                  color: Color(0xFFB00020),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Text(
+                    '$exception\n\n$stackLines',
+                    style: const TextStyle(
+                      color: Color(0xFF212121),
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

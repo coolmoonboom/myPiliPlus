@@ -14,13 +14,29 @@ import 'package:whisper_ggml/whisper_ggml.dart';
 ///
 /// 包含：模型下载/暂停/继续/卸载、双语开关、跟随播放开关、导入本地字幕、
 /// 翻译设置。
-class AiSubtitleSettingsSheet extends StatelessWidget {
+class AiSubtitleSettingsSheet extends StatefulWidget {
   const AiSubtitleSettingsSheet({
     required this.videoDetailController,
     super.key,
   });
 
   final VideoDetailController videoDetailController;
+
+  @override
+  State<AiSubtitleSettingsSheet> createState() =>
+      _AiSubtitleSettingsSheetState();
+}
+
+class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
+  late bool _bilingual = GStorage.setting.get(
+    SettingBoxKey.whisperBilingual,
+    defaultValue: true,
+  );
+
+  late bool _followPlayback = GStorage.setting.get(
+    SettingBoxKey.whisperFollowPlayback,
+    defaultValue: false,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -50,38 +66,29 @@ class AiSubtitleSettingsSheet extends StatelessWidget {
               const SizedBox(height: 12),
               _ModelList(modelManager: ModelManager.instance),
               const Divider(height: 28),
-              Obx(() {
-                final box = GStorage.setting;
-                final bilingual = box.get(
-                  SettingBoxKey.whisperBilingual,
-                  defaultValue: true,
-                );
-                return SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('双语字幕'),
-                  subtitle: const Text('在法文原文下方附加中文翻译'),
-                  value: bilingual,
-                  onChanged: (value) {
-                    box.put(SettingBoxKey.whisperBilingual, value);
-                  },
-                );
-              }),
-              Obx(() {
-                final box = GStorage.setting;
-                final follow = box.get(
-                  SettingBoxKey.whisperFollowPlayback,
-                  defaultValue: false,
-                );
-                return SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('跟随播放识别'),
-                  subtitle: const Text('边播边识别当前进度后的内容；关闭则从开头顺序识别整段'),
-                  value: follow,
-                  onChanged: (value) {
-                    box.put(SettingBoxKey.whisperFollowPlayback, value);
-                  },
-                );
-              }),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('双语字幕'),
+                subtitle: const Text('在法文原文下方附加中文翻译'),
+                value: _bilingual,
+                onChanged: (value) {
+                  setState(() => _bilingual = value);
+                  GStorage.setting.put(SettingBoxKey.whisperBilingual, value);
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('跟随播放识别'),
+                subtitle: const Text('边播边识别当前进度后的内容；关闭则从开头顺序识别整段'),
+                value: _followPlayback,
+                onChanged: (value) {
+                  setState(() => _followPlayback = value);
+                  GStorage.setting.put(
+                    SettingBoxKey.whisperFollowPlayback,
+                    value,
+                  );
+                },
+              ),
               const Divider(height: 28),
               ListTile(
                 contentPadding: EdgeInsets.zero,
