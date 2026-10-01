@@ -2074,10 +2074,13 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
       ],
     );
     // 竖屏（非全屏）时 AB 循环卡片移到视频下方显示，避免遮挡画面。
+    // 先无条件读取 Rx，保证任何尺寸下本 Obx 都注册订阅；否则横屏比例视频
+    // （maxWidth >= maxHeight）会短路到零订阅而抛 "improper use of a GetX"。
     final Widget result = Obx(() {
+      final abLoopShown = plPlayerController.abLoopPanelShown.value;
       final showPortraitAbCard = !isFullScreen &&
           maxWidth < maxHeight &&
-          plPlayerController.abLoopPanelShown.value;
+          abLoopShown;
       if (!showPortraitAbCard) {
         return child;
       }
