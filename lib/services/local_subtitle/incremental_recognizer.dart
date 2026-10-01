@@ -26,11 +26,11 @@ class IncrementalRecognizer extends GetxController {
   /// 视频总时长（秒）
   final int totalSeconds;
 
-  /// 每个识别分段的时长（秒）
-  static const int chunkSeconds = 60;
+  /// 顺序识别（不跟随播放）时每段的时长（秒）
+  static const int chunkSeconds = 40;
 
-  /// 跟随播放时，剩余多少秒进入下一段预取
-  static const int prefetchSeconds = 15;
+  /// 跟随播放时，识别窗口覆盖播放位置前后各 20 秒
+  static const int halfWindowSeconds = 20;
 
   final RxList<LocalSubtitleSegment> segments = <LocalSubtitleSegment>[].obs;
   final RxString status = ''.obs;
@@ -53,6 +53,9 @@ class IncrementalRecognizer extends GetxController {
   bool _rangeSupported = false;
   double _lastEnd = 0;
 
+  /// 跟随播放模式下已识别到的最远秒数（增量追加，避免重复转写）
+  double _recognizedEnd = 0;
+
   /// 音频流的 timescale（来自 mvhd），用于把 fragment 的解码时间换算为秒
   int _timescale = 0;
 
@@ -72,11 +75,16 @@ class IncrementalRecognizer extends GetxController {
     running.value = true;
     status.value = '准备音频';
     _cancelled = false;
-    _nextChunkStart = (fromSeconds ?? positionProvider?.call() ?? 0).clamp(
+    final startPos = (fromSeconds ?? positionProvider?.call() ?? 0).clamp(
       0,
       totalSeconds,
     );
-    _lastEnd = _nextChunkStart.toDouble();
+    _nextChunkStart = startPos;
+    // 跟随播放：识别窗口回看当前位置前 20 秒（「前后二十秒」）
+    _recognizedEnd = (startPos - halfWindowSeconds)
+        .clamp(0, totalSeconds)
+        .toDouble();
+    _lastEnd = _recognizedEnd;
     _cancelToken = CancelToken();
     try {
       await _prepare();
@@ -106,6 +114,8 @@ class IncrementalRecognizer extends GetxController {
         responseType: ResponseType.bytes,
         headers: {'Range': 'bytes=0-${probe - 1}'},
         validateStatus: (s) => s == 206 || s == 200,
+        sendTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 30),
       ),
     );
     final statusCode = probeRes.statusCode ?? -1;
@@ -130,6 +140,8 @@ class IncrementalRecognizer extends GetxController {
           responseType: ResponseType.bytes,
           headers: {'Range': 'bytes=0-524287'},
           validateStatus: (s) => s == 206 || s == 200,
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
         ),
       );
       final bytes = Uint8List.fromList(res.data ?? const []);
@@ -246,29 +258,21 @@ class IncrementalRecognizer extends GetxController {
   }
 
   Future<void> _run() async {
+    if (followPlayback) {
+      await _runFollow();
+    } else {
+      await _runSequential();
+    }
+  }
+
+  /// 顺序识别整段：从起始位置按固定长度分段往后识别，直到末尾。
+  Future<void> _runSequential() async {
     while (!_cancelled) {
       final chunkStart = _nextChunkStart;
       if (chunkStart >= totalSeconds) {
         break;
       }
       final chunkEnd = (chunkStart + chunkSeconds).clamp(0, totalSeconds);
-      if (followPlayback) {
-        // 等待播放进度到达本段起点（或接近段末）
-        while (!_cancelled) {
-          final pos = positionProvider?.call() ?? chunkStart;
-          if (pos >= chunkStart - 1 || pos >= chunkEnd - prefetchSeconds) {
-            break;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 800));
-        }
-        if (_cancelled) {
-          break;
-        }
-        if ((positionProvider?.call() ?? 0) > chunkEnd) {
-          _nextChunkStart = chunkEnd;
-          continue;
-        }
-      }
       status.value = '识别 ${_fmt(chunkStart)}~${_fmt(chunkEnd)}';
       try {
         final added = await _processChunk(chunkStart, chunkEnd);
@@ -283,6 +287,45 @@ class IncrementalRecognizer extends GetxController {
         status.value = '段 ${_fmt(chunkStart)} 失败：$e';
       }
       _nextChunkStart = chunkEnd;
+    }
+  }
+
+  /// 跟随播放：以当前播放位置为中心，保持识别窗口覆盖到「当前位置 + 20 秒」。
+  ///
+  /// 播放前进后只追加识别新增区间（增量），已处理部分不再重复转写；
+  /// 首次启动回看当前位置前 20 秒，形成「前后二十秒」窗口。
+  Future<void> _runFollow() async {
+    while (!_cancelled) {
+      final pos = (positionProvider?.call() ?? _nextChunkStart).clamp(
+        0,
+        totalSeconds,
+      );
+      if (pos >= totalSeconds - 1) {
+        break;
+      }
+      final winEnd = (pos + halfWindowSeconds).clamp(0, totalSeconds);
+      if (winEnd <= _recognizedEnd) {
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        continue;
+      }
+      final winStart = _recognizedEnd.floor();
+      status.value = '识别 ${_fmt(winStart)}~${_fmt(winEnd)}';
+      try {
+        final added = await _processChunk(winStart, winEnd);
+        if (added) {
+          segments.refresh();
+        }
+        _recognizedEnd = winEnd.toDouble();
+        _nextChunkStart = winEnd;
+      } catch (e) {
+        if (_cancelled) {
+          break;
+        }
+        status.value = '段 ${_fmt(winStart)} 失败：$e';
+        // 失败也推进起点，避免死循环反复识别同一段
+        _recognizedEnd = winEnd.toDouble();
+        _nextChunkStart = winEnd;
+      }
     }
   }
 
@@ -303,6 +346,8 @@ class IncrementalRecognizer extends GetxController {
         responseType: ResponseType.bytes,
         headers: {'Range': 'bytes=$b0-$rangeEnd'},
         validateStatus: (s) => s == 206 || s == 200,
+        sendTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 60),
       ),
     );
     if (_cancelled) {
@@ -432,8 +477,12 @@ class IncrementalRecognizer extends GetxController {
       return;
     }
     segments.removeWhere((s) => s.from >= newPosition - 2);
-    _nextChunkStart = newPosition.clamp(0, totalSeconds);
-    _lastEnd = _nextChunkStart.toDouble();
+    final pos = newPosition.clamp(0, totalSeconds);
+    _nextChunkStart = pos;
+    _recognizedEnd = (pos - halfWindowSeconds)
+        .clamp(0, totalSeconds)
+        .toDouble();
+    _lastEnd = _recognizedEnd - 1.5;
   }
 
   @override

@@ -58,7 +58,7 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
 
   late bool _followPlayback = GStorage.setting.get(
     SettingBoxKey.whisperFollowPlayback,
-    defaultValue: false,
+    defaultValue: true,
   );
 
   @override
@@ -105,7 +105,7 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('跟随播放识别'),
-                subtitle: const Text('边播边识别当前进度后的内容；关闭则从开头顺序识别整段'),
+                subtitle: const Text('边播边识别播放位置前后的内容，字幕实时更新；关闭则从当前位置顺序识别整段'),
                 value: _followPlayback,
                 onChanged: (value) {
                   setState(() => _followPlayback = value);

@@ -62,7 +62,7 @@ class LiveSubtitleSession extends GetxController {
 
   bool get _followPlayback => GStorage.setting.get(
     SettingBoxKey.whisperFollowPlayback,
-    defaultValue: false,
+    defaultValue: true,
   );
 
   void _onPosition(int pos) {
@@ -109,9 +109,20 @@ class LiveSubtitleSession extends GetxController {
     if (_closed) {
       return;
     }
+    var total = plPlayerController.duration.value;
+    for (var i = 0; i < 10 && total <= 0; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      total = plPlayerController.duration.value;
+    }
+    if (total <= 0) {
+      running.value = false;
+      stage.value = '无法获取视频时长';
+      SmartDialog.showToast('无法获取视频时长，请先播放几秒');
+      return;
+    }
     final recognizer = IncrementalRecognizer(
       audioUrl: url,
-      totalSeconds: plPlayerController.duration.value,
+      totalSeconds: total,
     );
     _recognizer = recognizer
       ..model = _model

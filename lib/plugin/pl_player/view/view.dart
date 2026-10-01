@@ -725,6 +725,23 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
             );
           }
 
+          if (subs.isEmpty) {
+            return Tooltip(
+              message: '实时双语字幕（本地识别）',
+              child: InkWell(
+                onTap: toLiveSubtitlePanel,
+                child: SizedBox(
+                  width: widgetWidth,
+                  height: 30,
+                  child: const Icon(
+                    Icons.closed_caption_off_outlined,
+                    size: 22,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            );
+          }
           return PopupMenuButton<int>(
             tooltip: '字幕',
             requestFocus: false,

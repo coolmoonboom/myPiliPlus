@@ -122,7 +122,7 @@ class _SubtitleList extends StatelessWidget {
             padding: const EdgeInsets.all(24),
             child: Text(
               '点击「开始识别字幕」后，识别结果会逐行显示在这里\n'
-              '（边播边识别，约每 60 秒一段）',
+              '（边播边识别，覆盖播放位置前后约 20 秒）',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.outline,
