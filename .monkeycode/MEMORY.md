@@ -97,3 +97,11 @@ Entries discovered by the Agent during task execution should follow this format:
   - 取产物：`gh api repos/coolmoonboom/myPiliPlus/actions/artifacts/<artifact_id>/zip`（返回的就是 APK 字节；`gh run download` 会把它解成目录）。artifact_id 用 `gh api .../runs/<run_id>/artifacts --jq '.artifacts[]|select(.name|contains("arm64"))|.id'` 取。
   - 上传：`gh release upload 2.3.0 <apk> --repo coolmoonboom/myPiliPlus`（同名已存在加 --clobber）。
   - gh 认证 token 易过期（HTTP 401 Bad credentials）；用 `printf 'protocol=https\nhost=github.com\n\n' | git credential fill` 取 password 后 `gh auth login --with-token` 重新登录即可。
+
+[新 UI 必须用 material_ui 主题体系；视频页弹层走 PageUtils.showVideoBottomSheet]
+- Date: 2026-10-01
+- Context: Discovered by Agent while fixing 字幕面板打不开/深色模式失效
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 全项目 UI 依赖 package:material_ui/material_ui.dart（Flutter material 的 fork，自带独立 ThemeData/Theme）。新建页面/弹层若 import package:flutter/material.dart，Theme.of 读不到 material_ui 注入的 app 主题（含深色），会渲成 fallback 浅色；且 material_ui 的 ThemeData 不能传给 flutter 的 Theme 组件（编译报 ThemeData 类型不匹配）。
+  - 视频页（播放器之上）显示弹层应复用 PageUtils.showVideoBottomSheet 或 HeaderMixin.showBottomSheet（竖屏底部/横屏右侧面板），不要直接 showModalBottomSheet；深色视频页(darkVideoPage)下用 ThemeUtils.darkTheme 包一层内容。
