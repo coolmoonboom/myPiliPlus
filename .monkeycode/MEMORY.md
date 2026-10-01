@@ -76,3 +76,24 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 改 namespace/applicationId 但 Kotlin/Java 源码留旧包时，manifest 中所有相对类名（.MainActivity、.BiliDocumentsProvider 等）必须改成旧包全限定名，否则启动即 ClassNotFoundException 闪退
   - 本项目 JNI（ffigen bindings.g.dart）按 com/example/piliplus/... FindClass，源码包名不可轻改；applicationId 可与源码包名不同
+
+[GetX(fork) Obx “improper use” 崩溃的成因与定位]
+- Date: 2026-10-01
+- Context: Discovered by Agent while fixing 在线视频页白屏（有声音无画面）
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 规则：Obx 在其「首次 build」内若未读取任何 Rx（canUpdate=_subscriptions.isNotEmpty 为假），get 直接抛 "the improper use of a GetX has been detected"。订阅是累加的、仅随 Obx 卸载清除，故只会在首次 build 触发。
+  - 高发写法：把 Rx 读取放在 `&&`/`||` 末尾，被前面的普通条件短路；或在 Obx 内只读 Hive（GStorage.setting.get）等非 Rx 来源；或外层 Obx 的 Rx 只在内层嵌套 Obx 里读。
+  - 排查：在 main.dart 用 ErrorWidget.builder 渲染可视化面板，并以「面板自身 element 的 context.visitAncestorElements」枚举祖先 widget 链（注意 Flutter 3.47 的 FlutterErrorDetails.context 是 DiagnosticsNode?，不是 BuildContext?，无法直接遍历）。栈顶 ObxState.build + 祖先链可精确定位到具体 Obx。
+  - 修复：把 Rx 读取提到 Obx builder 最前面无条件读取。
+  - 健康检查：RxList.toList()/RxMap[key]/.value 都会经由 value getter 注册订阅；Hive-only 读取不会。
+
+[不重新打 tag 时手动发布 APK 到既有 Release]
+- Date: 2026-10-01
+- Context: Discovered by Agent while publishing fix build to Release 2.3.0
+- Category: Operations & Deployment
+- Instructions:
+  - gh workflow run 省略 tag 时，build.yml 的 Release 步骤被跳过，只跑 upload-artifact；不会自动生成 Release 资产。
+  - 取产物：`gh api repos/coolmoonboom/myPiliPlus/actions/artifacts/<artifact_id>/zip`（返回的就是 APK 字节；`gh run download` 会把它解成目录）。artifact_id 用 `gh api .../runs/<run_id>/artifacts --jq '.artifacts[]|select(.name|contains("arm64"))|.id'` 取。
+  - 上传：`gh release upload 2.3.0 <apk> --repo coolmoonboom/myPiliPlus`（同名已存在加 --clobber）。
+  - gh 认证 token 易过期（HTTP 401 Bad credentials）；用 `printf 'protocol=https\nhost=github.com\n\n' | git credential fill` 取 password 后 `gh auth login --with-token` 重新登录即可。
