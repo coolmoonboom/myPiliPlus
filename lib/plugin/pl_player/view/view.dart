@@ -32,6 +32,8 @@ import 'package:PiliPlus/pages/live_room/widgets/bottom_control.dart'
     as live_bottom;
 import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/pages/video/local_subtitle/view.dart';
+import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
+import 'package:PiliPlus/pages/video/subtitle_ai/view.dart';
 import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
 import 'package:PiliPlus/pages/video/post_panel/popup_menu_text.dart';
 import 'package:PiliPlus/pages/video/post_panel/view.dart';
@@ -698,6 +700,14 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
         () {
           final subs = videoDetailController.subtitles;
           final val = videoDetailController.vttSubtitlesIndex.value;
+          void toLiveSubtitlePanel() {
+            showSubtitleBottomSheet(
+              context,
+              playerController: plPlayerController,
+              child: SubtitleAiPanel(videoDetailController: videoDetailController),
+            );
+          }
+
           void toLocalSubtitlePage() {
             Get.to(
               () => LocalSubtitleView(
@@ -743,11 +753,23 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                   const PopupMenuDivider(),
                 ],
                 PopupMenuItem<int>(
+                  value: -2,
+                  height: 35,
+                  onTap: toLiveSubtitlePanel,
+                  child: const Text(
+                    '实时双语字幕（本地识别）',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                PopupMenuItem<int>(
                   value: -1,
                   height: 35,
                   onTap: toLocalSubtitlePage,
                   child: const Text(
-                    '本地法语字幕（离线识别）',
+                    '整段离线识别',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 13,
