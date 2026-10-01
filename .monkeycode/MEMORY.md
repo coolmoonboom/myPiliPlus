@@ -105,3 +105,13 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 全项目 UI 依赖 package:material_ui/material_ui.dart（Flutter material 的 fork，自带独立 ThemeData/Theme）。新建页面/弹层若 import package:flutter/material.dart，Theme.of 读不到 material_ui 注入的 app 主题（含深色），会渲成 fallback 浅色；且 material_ui 的 ThemeData 不能传给 flutter 的 Theme 组件（编译报 ThemeData 类型不匹配）。
   - 视频页（播放器之上）显示弹层应复用 PageUtils.showVideoBottomSheet 或 HeaderMixin.showBottomSheet（竖屏底部/横屏右侧面板），不要直接 showModalBottomSheet；深色视频页(darkVideoPage)下用 ThemeUtils.darkTheme 包一层内容。
+
+[Whisper 模型目录与导出/导入约定]
+- Date: 2026-10-01
+- Context: Discovered by Agent while migrating 模型存放目录 per user request
+- Category: Operations & Deployment
+- Instructions:
+  - 模型根目录：Android 上为 `Download/piliplus_models`（getDownloadsDirectory()，Android 10+ 直写无需权限，manifest 已有 READ/WRITE_EXTERNAL_STORAGE maxSdk 32/28）；iOS/macOS 回退 getLibraryDirectory，其余平台 getApplicationSupportDirectory 下 whisper_models。
+  - 识别统一走 LocalSubtitleService.transcribeWithModel（底层 Whisper().transcribe 的 modelPath），实时/整段共用；不要再用 WhisperController().transcribe（它固定用应用私有目录）。
+  - ModelManager._migrate 负责把旧私有目录模型拷到新目录并删除旧文件；导出=返回路径供分享，导入=按 ggml-<name>.bin 文件名匹配后 copy 进识别目录。
+  - ModelSelector 构造需要 playerController（导出分享/导入 bottom sheet 用），实例化处：settings_sheet.dart 与 local_subtitle/view.dart。
