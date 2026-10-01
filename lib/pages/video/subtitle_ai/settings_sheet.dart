@@ -83,7 +83,7 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
                 ),
               ),
               const SizedBox(height: 12),
-              _ModelList(modelManager: ModelManager.instance),
+              ModelSelector(modelManager: ModelManager.instance),
               const Divider(height: 28),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -136,10 +136,32 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
   }
 }
 
-class _ModelList extends StatelessWidget {
-  const _ModelList({required this.modelManager});
+class ModelSelector extends StatefulWidget {
+  const ModelSelector({required this.modelManager, super.key});
 
   final ModelManager modelManager;
+
+  @override
+  State<ModelSelector> createState() => _ModelSelectorState();
+}
+
+class _ModelSelectorState extends State<ModelSelector> {
+  late WhisperModel _current = LocalSubtitleService.currentModel;
+
+  void _select(WhisperModel model) {
+    if (model == _current) {
+      return;
+    }
+    setState(() => _current = model);
+    LocalSubtitleService.setCurrentModel(model);
+    final state = widget.modelManager.states[model.modelName];
+    if (state == null ||
+        (state.state != ModelTaskState.done &&
+            state.state != ModelTaskState.downloading)) {
+      widget.modelManager.download(model);
+      SmartDialog.showToast('正在下载 ${model.modelName} 识别模型…');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,11 +170,19 @@ class _ModelList extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('识别模型', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 2),
+        Text(
+          '点选即切换实时/离线识别使用的模型；未下载的会自动下载。',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
+        ),
         const SizedBox(height: 4),
         ...ModelManager.managedModels.map((model) {
           return Obx(() {
             final state =
-                modelManager.states[model.modelName] ?? ModelState.unknown;
+                widget.modelManager.states[model.modelName] ??
+                ModelState.unknown;
             return _buildRow(context, model, state);
           });
         }),
@@ -164,60 +194,92 @@ class _ModelList extends StatelessWidget {
     final theme = Theme.of(context);
     final label = LocalSubtitleService.modelLabel(model);
     final progress = state.progress;
+    final isCurrent = model == _current;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text(label, style: theme.textTheme.bodyMedium)),
-              if (state.state == ModelTaskState.done)
-                const Text('已下载', style: TextStyle(color: Colors.green))
-              else ...[
-                TextButton(
-                  onPressed: state.state == ModelTaskState.downloading
-                      ? () => modelManager.pause(model)
-                      : () => modelManager.download(model),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _select(model),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isCurrent
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 18,
+                  color: isCurrent
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.outline,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
                   child: Text(
-                    state.state == ModelTaskState.downloading
-                        ? '暂停'
-                        : (state.state == ModelTaskState.paused ? '继续' : '下载'),
+                    label,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: isCurrent ? theme.colorScheme.primary : null,
+                      fontWeight: isCurrent ? FontWeight.w600 : null,
+                    ),
                   ),
                 ),
-                if (state.state == ModelTaskState.paused ||
-                    state.state == ModelTaskState.done)
-                  TextButton(
-                    onPressed: () => modelManager.remove(model),
-                    child: const Text('卸载'),
+                if (isCurrent)
+                  Text(
+                    '使用中',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
+                const SizedBox(width: 8),
+                if (state.state == ModelTaskState.done)
+                  const Text('已下载', style: TextStyle(color: Colors.green))
+                else ...[
+                  TextButton(
+                    onPressed: state.state == ModelTaskState.downloading
+                        ? () => widget.modelManager.pause(model)
+                        : () => widget.modelManager.download(model),
+                    child: Text(
+                      state.state == ModelTaskState.downloading
+                          ? '暂停'
+                          : (state.state == ModelTaskState.paused ? '继续' : '下载'),
+                    ),
+                  ),
+                  if (state.state == ModelTaskState.paused ||
+                      state.state == ModelTaskState.done)
+                    TextButton(
+                      onPressed: () => widget.modelManager.remove(model),
+                      child: const Text('卸载'),
+                    ),
+                ],
               ],
-            ],
-          ),
-          if (state.state == ModelTaskState.downloading ||
-              state.state == ModelTaskState.paused) ...[
-            const SizedBox(height: 2),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(value: progress, minHeight: 4),
             ),
-            if (state.received > 0)
+            if (state.state == ModelTaskState.downloading ||
+                state.state == ModelTaskState.paused) ...[
+              const SizedBox(height: 2),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(value: progress, minHeight: 4),
+              ),
+              if (state.received > 0)
+                Text(
+                  '${(state.received / 1048576).toStringAsFixed(1)} MB'
+                  '${state.total > 0 ? '/ ${(state.total / 1048576).toStringAsFixed(1)} MB' : ''}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+            ],
+            if (state.error != null)
               Text(
-                '${(state.received / 1048576).toStringAsFixed(1)} MB'
-                '${state.total > 0 ? '/ ${(state.total / 1048576).toStringAsFixed(1)} MB' : ''}',
+                state.error!,
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline,
+                  color: theme.colorScheme.error,
                 ),
               ),
           ],
-          if (state.error != null)
-            Text(
-              state.error!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.error,
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -285,7 +347,7 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
               items: const [
                 DropdownMenuItem(
                   value: TranslationProvider.glossary,
-                  child: Text('本地词库优先，在线接口自动回退'),
+                  child: Text('自动：在线翻译优先，离线词库兜底'),
                 ),
                 DropdownMenuItem(
                   value: TranslationProvider.http,

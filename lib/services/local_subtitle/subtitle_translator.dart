@@ -6,19 +6,20 @@ import 'package:PiliPlus/utils/storage_key.dart';
 
 /// 字幕翻译器抽象。
 ///
-/// 本地优先：默认先使用端内离线词库（[GlossaryTranslator]）翻译，
-/// 当离线结果不可用时回退到可配置的在线翻译接口（[HttpSubtitleTranslator]）。
-/// 如果后续接入真正的端内 NMT 模型（如 NLLB / opus-mt 的 ONNX 模型），
-/// 只需实现本接口并在 [TranslationService.create] 中替换 [GlossaryTranslator] 即可。
+/// 在线优先：默认先调用可配置的在线翻译接口（LibreTranslate 兼容协议，
+/// 可指向 MyMemory 或端内本地 translator 服务），当在线不可用时回退到
+/// 端内离线词库（[GlossaryTranslator]）。如果后续接入真正的端内 NMT 模型
+/// （如 NLLB / opus-mt 的 ONNX 模型），只需实现本接口并在
+/// [TranslationService.create] 中替换 [GlossaryTranslator] 即可。
 abstract class SubtitleTranslator {
   Future<String> translate(String text, {String from = 'fr', String to = 'zh'});
 }
 
 enum TranslationProvider {
-  /// 离线词库（无需网络，句子级质量有限）
+  /// 自动：在线翻译接口优先，离线词库兜底
   glossary,
 
-  /// 在线翻译接口
+  /// 仅在线翻译接口
   http,
 }
 
@@ -56,16 +57,16 @@ class TranslationSettings {
 }
 
 abstract final class TranslationService {
-  /// 根据设置创建翻译器；默认「本地词库优先 + 在线回退」。
+  /// 根据设置创建翻译器；默认「在线优先 + 本地词库兜底」。
   static SubtitleTranslator create([TranslationSettings? settings]) {
     final config = settings ?? TranslationSettings.load();
     if (config.provider == TranslationProvider.glossary) {
       return _FallbackTranslator(
-        primary: GlossaryTranslator(),
-        fallback: HttpSubtitleTranslator(
+        primary: HttpSubtitleTranslator(
           endpoint: config.endpoint,
           apiKey: config.apiKey,
         ),
+        fallback: GlossaryTranslator(),
       );
     }
     return HttpSubtitleTranslator(

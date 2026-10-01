@@ -3,12 +3,12 @@ import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
+import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:whisper_ggml/whisper_ggml.dart';
 
 /// 本地法语字幕识别页面
 /// 端内 Whisper 识别法语语音，生成法中双语字幕
@@ -29,7 +29,6 @@ class LocalSubtitleView extends StatefulWidget {
 class _LocalSubtitleViewState extends State<LocalSubtitleView> {
   final Box setting = GStorage.setting;
 
-  late WhisperModel _model = _savedModel;
   late bool _bilingual = setting.get(SettingBoxKey.whisperBilingual, defaultValue: true);
 
   bool _running = false;
@@ -38,12 +37,6 @@ class _LocalSubtitleViewState extends State<LocalSubtitleView> {
   List<LocalSubtitleSegment> _segments = [];
   String? _vtt;
   String? _error;
-
-  WhisperModel get _savedModel {
-    final index = setting.get(SettingBoxKey.whisperModel, defaultValue: 1);
-    final options = LocalSubtitleService.modelOptions;
-    return options[index.clamp(0, options.length - 1)].model;
-  }
 
   Future<void> _start() async {
     setState(() {
@@ -56,7 +49,7 @@ class _LocalSubtitleViewState extends State<LocalSubtitleView> {
     });
     final res = await LocalSubtitleService.recognize(
       dataSource: widget.plPlayerController.dataSource,
-      model: _model,
+      model: LocalSubtitleService.currentModel,
       bilingual: _bilingual,
       onStage: (stage) {
         if (mounted) setState(() => _stage = stage);
@@ -121,7 +114,7 @@ class _LocalSubtitleViewState extends State<LocalSubtitleView> {
             ),
           ),
           const SizedBox(height: 20),
-          _buildModelSelector(theme),
+          ModelSelector(modelManager: ModelManager.instance),
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -216,39 +209,6 @@ class _LocalSubtitleViewState extends State<LocalSubtitleView> {
     final m = s ~/ 60;
     final ss = s % 60;
     return '$m:${ss.toString().padLeft(2, '0')}';
-  }
-
-  Widget _buildModelSelector(ThemeData theme) {
-    return Row(
-      children: [
-        const Text('识别模型'),
-        const SizedBox(width: 12),
-        Expanded(
-          child: DropdownButtonFormField<WhisperModel>(
-            initialValue: _model,
-            isExpanded: true,
-            decoration: const InputDecoration(border: InputBorder.none),
-            items: [
-              for (final option in LocalSubtitleService.modelOptions)
-                DropdownMenuItem(
-                  value: option.model,
-                  child: Text(
-                    option.label,
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                ),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => _model = value);
-              final index = LocalSubtitleService.modelOptions
-                  .indexWhere((e) => e.model == value);
-              setting.put(SettingBoxKey.whisperModel, index);
-            },
-          ),
-        ),
-      ],
-    );
   }
 }
 

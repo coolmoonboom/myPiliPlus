@@ -53,6 +53,9 @@ class IncrementalRecognizer extends GetxController {
   bool _rangeSupported = false;
   double _lastEnd = 0;
 
+  /// 音频流的 timescale（来自 mvhd），用于把 fragment 的解码时间换算为秒
+  int _timescale = 0;
+
   double get _bytesPerSecond {
     final total = _totalBytes;
     if (total == null || total <= 0 || totalSeconds <= 0) {
@@ -144,6 +147,102 @@ class IncrementalRecognizer extends GetxController {
     if (_initHeader == null || _initHeader!.isEmpty) {
       throw '无法解析音频流';
     }
+    _parseTimescale(_initHeader!);
+  }
+
+  /// 解析 init segment（moov）中 mvhd 的 timescale。
+  void _parseTimescale(Uint8List init) {
+    final moov = _findBoxContent(init, 'moov');
+    if (moov == null) {
+      return;
+    }
+    final mvhd = _findBoxContent(init, 'mvhd', start: moov);
+    if (mvhd == null || mvhd + 12 > init.length) {
+      return;
+    }
+    // mvhd content: version+flags(4) creation(4) modification(4) timescale(4)
+    _timescale = _readU32(init, mvhd + 12);
+  }
+
+  /// 最外层查找指定类型 box，返回其内容起始偏移。
+  int? _findBoxContent(Uint8List data, String type, {int start = 0}) {
+    var off = start;
+    while (off + 8 <= data.length) {
+      final size = _readU32(data, off);
+      if (size < 8) {
+        return null;
+      }
+      final t = String.fromCharCodes(data.sublist(off + 4, off + 8));
+      if (t == type) {
+        return off + 8;
+      }
+      off += size;
+    }
+    return null;
+  }
+
+  /// 解析 [moofOffset] 所在 moof 里 first traf 的 tfdt（baseMediaDecodeTime）。
+  ///
+  /// 返回媒体时间刻度值（需除以 [_timescale] 得到秒）；解析失败返回 null。
+  int? _moofStartTime(Uint8List data, int moofOffset) {
+    if (_timescale <= 0 || moofOffset < 0 || moofOffset + 16 > data.length) {
+      return null;
+    }
+    final moofSize = _readU32(data, moofOffset);
+    final moofEnd = moofSize == 0 ? data.length : moofOffset + moofSize;
+    var off = moofOffset + 8;
+    while (off + 8 <= data.length && off + 8 <= moofEnd) {
+      final size = _readU32(data, off);
+      if (size < 8) {
+        return null;
+      }
+      final type = String.fromCharCodes(data.sublist(off + 4, off + 8));
+      if (type == 'traf') {
+        final t = _findTfdt(data, off, off + size);
+        if (t != null) {
+          return t;
+        }
+      }
+      off += size;
+    }
+    return null;
+  }
+
+  int? _findTfdt(Uint8List data, int trafStart, int trafEnd) {
+    var off = trafStart + 8;
+    while (off + 8 <= data.length && off + 8 <= trafEnd) {
+      final size = _readU32(data, off);
+      if (size < 8) {
+        return null;
+      }
+      final type = String.fromCharCodes(data.sublist(off + 4, off + 8));
+      if (type == 'tfdt') {
+        if (off + 16 > data.length) {
+          return null;
+        }
+        final version = data[off + 8];
+        if (version == 0) {
+          return _readU32(data, off + 12);
+        }
+        if (off + 20 > data.length) {
+          return null;
+        }
+        return _readU64(data, off + 12);
+      }
+      off += size;
+    }
+    return null;
+  }
+
+  static int _readU32(Uint8List data, int offset) {
+    return (data[offset] << 24) |
+        (data[offset + 1] << 16) |
+        (data[offset + 2] << 8) |
+        data[offset + 3];
+  }
+
+  static int _readU64(Uint8List data, int offset) {
+    return _readU32(data, offset) * 4294967296 + _readU32(data, offset + 4);
   }
 
   Future<void> _run() async {
@@ -233,7 +332,12 @@ class IncrementalRecognizer extends GetxController {
     final data = Uint8List(header.length + slice.length - skip);
     data.setRange(0, header.length, header);
     data.setRange(header.length, data.length, slice.sublist(skip));
-    final t0 = (b0 + skip) / bps;
+    // 优先用该 fragment 的 tfdt 解码时间得到精确起点秒数；
+    // 解析失败（如非 fMP4 流）再回退到字节偏移估算。
+    final tfdt = moof >= 0 ? _moofStartTime(slice, moof) : null;
+    final t0 = tfdt != null
+        ? tfdt / _timescale
+        : (b0 + skip) / bps;
     final abs = await _transcribeChunk(s0, data, t0);
     return _append(segments, abs);
   }

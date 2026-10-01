@@ -5,6 +5,8 @@ import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/models_new/video/video_play_info/subtitle.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
+import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/subtitle_utils.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -54,6 +56,21 @@ abstract final class LocalSubtitleService {
 
   static String modelLabel(WhisperModel model) =>
       modelOptions.firstWhere((e) => e.model == model).label;
+
+  /// 当前使用的识别模型（实时与离线识别共用）。
+  static WhisperModel get currentModel {
+    final box = GStorage.setting;
+    final index = box.get(SettingBoxKey.whisperModel, defaultValue: 1);
+    return modelOptions[index.clamp(0, modelOptions.length - 1)].model;
+  }
+
+  /// 设置当前识别模型。
+  static void setCurrentModel(WhisperModel model) {
+    final index = modelOptions.indexWhere((e) => e.model == model);
+    if (index >= 0) {
+      GStorage.setting.put(SettingBoxKey.whisperModel, index);
+    }
+  }
 
   /// 解析可用于识别的音频文件。
   ///

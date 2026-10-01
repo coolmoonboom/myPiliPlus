@@ -701,6 +701,14 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           final subs = videoDetailController.subtitles;
           final val = videoDetailController.vttSubtitlesIndex.value;
           void toLiveSubtitlePanel() {
+            if (MediaQuery.of(context).orientation == Orientation.portrait) {
+              final idx = videoDetailController.liveSubtitleTabIndex;
+              if (idx != null &&
+                  videoDetailController.tabCtr.length > idx) {
+                videoDetailController.tabCtr.animateTo(idx);
+              }
+              return;
+            }
             showSubtitleBottomSheet(
               context,
               playerController: plPlayerController,
