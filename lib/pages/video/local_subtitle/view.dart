@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
-import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
-import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
@@ -104,11 +103,10 @@ class _LocalSubtitleViewState extends State<LocalSubtitleView> {
           IconButton(
             tooltip: '翻译设置',
             icon: const Icon(Icons.tune),
-            onPressed: () => showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              useSafeArea: true,
-              builder: (_) => const _TranslationSettingsSheet(),
+            onPressed: () => showSubtitleBottomSheet(
+              context,
+              playerController: widget.plPlayerController,
+              child: const TranslationSettingsSheet(),
             ),
           ),
         ],
@@ -254,105 +252,3 @@ class _LocalSubtitleViewState extends State<LocalSubtitleView> {
   }
 }
 
-class _TranslationSettingsSheet extends StatefulWidget {
-  const _TranslationSettingsSheet();
-
-  @override
-  State<_TranslationSettingsSheet> createState() =>
-      _TranslationSettingsSheetState();
-}
-
-class _TranslationSettingsSheetState
-    extends State<_TranslationSettingsSheet> {
-  late final TextEditingController _endpoint = TextEditingController(
-    text: setting.get(SettingBoxKey.translationEndpoint) as String? ?? '',
-  );
-  late final TextEditingController _apiKey = TextEditingController(
-    text: setting.get(SettingBoxKey.translationApiKey) as String? ?? '',
-  );
-  late TranslationProvider _provider = TranslationSettings.load().provider;
-
-  Box get setting => GStorage.setting;
-
-  @override
-  void dispose() {
-    _endpoint.dispose();
-    _apiKey.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    TranslationSettings(
-      provider: _provider,
-      endpoint: _endpoint.text.trim(),
-      apiKey: _apiKey.text.trim(),
-    ).save();
-    SmartDialog.showToast('翻译设置已保存');
-    Get.back();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.viewInsetsOf(context).bottom + 16,
-      ),
-      child: Material(
-        clipBehavior: Clip.hardEdge,
-        color: theme.colorScheme.surface,
-        borderRadius: const BorderRadius.all(Radius.circular(12)),
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.all(16),
-          children: [
-              Text('中文翻译方式', style: theme.textTheme.titleMedium),
-              const SizedBox(height: 8),
-              DropdownButton<TranslationProvider>(
-                isExpanded: true,
-                value: _provider,
-                items: const [
-                  DropdownMenuItem(
-                    value: TranslationProvider.glossary,
-                    child: Text('本地词库优先，在线接口自动回退'),
-                  ),
-                  DropdownMenuItem(
-                    value: TranslationProvider.http,
-                    child: Text('在线翻译接口'),
-                  ),
-                ],
-                onChanged: (value) {
-                  if (value == null) return;
-                  setState(() => _provider = value);
-                },
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _endpoint,
-                decoration: const InputDecoration(
-                  labelText: '接口地址（可选）',
-                  helperText:
-                      '留空使用 MyMemory 免费接口；填写则按 LibreTranslate 协议 POST',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _apiKey,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'API Key（可选）',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              FilledButton(onPressed: _save, child: const Text('保存')),
-          ],
-        ),
-      ),
-    );
-  }
-}

@@ -31,7 +31,7 @@ import 'package:PiliPlus/pages/danmaku/danmaku_model.dart';
 import 'package:PiliPlus/pages/live_room/widgets/bottom_control.dart'
     as live_bottom;
 import 'package:PiliPlus/pages/video/controller.dart';
-import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
+import 'package:PiliPlus/pages/video/local_subtitle/view.dart';
 import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
 import 'package:PiliPlus/pages/video/post_panel/popup_menu_text.dart';
 import 'package:PiliPlus/pages/video/post_panel/view.dart';
@@ -699,11 +699,9 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           final subs = videoDetailController.subtitles;
           final val = videoDetailController.vttSubtitlesIndex.value;
           void toLocalSubtitlePage() {
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              useSafeArea: true,
-              builder: (_) => AiSubtitleSettingsSheet(
+            Get.to(
+              () => LocalSubtitleView(
+                plPlayerController: plPlayerController,
                 videoDetailController: videoDetailController,
               ),
             );

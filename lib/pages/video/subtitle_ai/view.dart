@@ -52,12 +52,10 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
               IconButton(
                 tooltip: 'AI 字幕设置',
                 icon: const Icon(Icons.settings_outlined, size: 20),
-                onPressed: () => showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  useSafeArea: true,
-                  builder: (_) =>
-                      AiSubtitleSettingsSheet(videoDetailController: ctr),
+                onPressed: () => showSubtitleBottomSheet(
+                  context,
+                  playerController: ctr.plPlayerController,
+                  child: AiSubtitleSettingsSheet(videoDetailController: ctr),
                 ),
               ),
               IconButton(

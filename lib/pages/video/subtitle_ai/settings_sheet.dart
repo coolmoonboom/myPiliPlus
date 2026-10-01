@@ -1,14 +1,33 @@
 import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
+import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
+
+/// 在视频页之上显示字幕相关面板。
+///
+/// 复用视频页统一的底部面板机制（竖屏为底部面板、横屏为右侧面板），
+/// 并在深色视频页下套用深色主题，保证与播放器 UI 一致。
+Future<void>? showSubtitleBottomSheet(
+  BuildContext context, {
+  required Widget child,
+  required PlPlayerController playerController,
+}) {
+  final theme = playerController.darkVideoPage ? ThemeUtils.darkTheme : null;
+  return PageUtils.showVideoBottomSheet(
+    context,
+    child: theme == null ? child : Theme(data: theme, child: child),
+  );
+}
 
 /// AI 字幕设置面板（竖屏字幕页与横屏字幕按钮共用）。
 ///
@@ -102,11 +121,11 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.translate_outlined, size: 20),
                 title: const Text('翻译设置'),
-                onTap: () => showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  useSafeArea: true,
-                  builder: (_) => const _TranslationSettingsSheet(),
+                onTap: () => showSubtitleBottomSheet(
+                  context,
+                  playerController:
+                      widget.videoDetailController.plPlayerController,
+                  child: const TranslationSettingsSheet(),
                 ),
               ),
             ],
@@ -204,15 +223,15 @@ class _ModelList extends StatelessWidget {
   }
 }
 
-class _TranslationSettingsSheet extends StatefulWidget {
-  const _TranslationSettingsSheet();
+class TranslationSettingsSheet extends StatefulWidget {
+  const TranslationSettingsSheet({super.key});
 
   @override
-  State<_TranslationSettingsSheet> createState() =>
+  State<TranslationSettingsSheet> createState() =>
       _TranslationSettingsSheetState();
 }
 
-class _TranslationSettingsSheetState extends State<_TranslationSettingsSheet> {
+class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
   late final TextEditingController _endpoint = TextEditingController(
     text: setting.get(SettingBoxKey.translationEndpoint) as String? ?? '',
   );

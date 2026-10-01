@@ -401,11 +401,8 @@ class HeaderControlState extends State<HeaderControl>
                   dense: true,
                   onTap: () {
                     Get.back();
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      useSafeArea: true,
-                      builder: (_) => AiSubtitleSettingsSheet(
+                    showBottomSheet(
+                      (context, setState) => AiSubtitleSettingsSheet(
                         videoDetailController: videoDetailCtr,
                       ),
                     );

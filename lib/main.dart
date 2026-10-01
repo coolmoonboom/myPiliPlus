@@ -260,31 +260,32 @@ class _ErrorPanelState extends State<ErrorPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.maybeOf(context)?.colorScheme;
     final stackLines = (widget.stack?.toString().split('\n') ?? const [])
         .where((line) => line.trim().isNotEmpty)
         .take(30)
         .join('\n');
     return ColoredBox(
-      color: const Color(0xFFFFF7E6),
+      color: scheme?.errorContainer ?? const Color(0xFFFFF7E6),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'build 异常（调试信息）',
                 style: TextStyle(
-                  color: Color(0xFFB00020),
+                  color: scheme?.onErrorContainer ?? const Color(0xFFB00020),
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '【元素树定位】（本面板替换失败的 Obx，以下是从其父级向上）',
                 style: TextStyle(
-                  color: Color(0xFFB00020),
+                  color: scheme?.onErrorContainer ?? const Color(0xFFB00020),
                   fontWeight: FontWeight.bold,
                   fontSize: 13,
                 ),
@@ -292,32 +293,30 @@ class _ErrorPanelState extends State<ErrorPanel> {
               const SizedBox(height: 4),
               Text(
                 _ancestors,
-                style: const TextStyle(
-                  color: Color(0xFF1565C0),
+                style: TextStyle(
+                  color: scheme?.primary ?? const Color(0xFF1565C0),
                   fontSize: 12,
                   height: 1.35,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '【异常原文 + 调用栈】',
                 style: TextStyle(
-                  color: Color(0xFFB00020),
+                  color: scheme?.onErrorContainer ?? const Color(0xFFB00020),
                   fontWeight: FontWeight.bold,
                   fontSize: 13,
                 ),
               ),
               const SizedBox(height: 4),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Text(
-                    '${widget.exception}\n\n$stackLines',
-                    style: const TextStyle(
-                      color: Color(0xFF212121),
-                      fontSize: 13,
-                      height: 1.4,
-                    ),
+              SingleChildScrollView(
+                child: Text(
+                  '${widget.exception}\n\n$stackLines',
+                  style: TextStyle(
+                    color: scheme?.onSurface ?? const Color(0xFF212121),
+                    fontSize: 13,
+                    height: 1.4,
                   ),
                 ),
               ),
