@@ -260,7 +260,7 @@ class _ErrorPanelState extends State<ErrorPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.maybeOf(context)?.colorScheme;
+    final scheme = Theme.of(context).colorScheme;
     final stackLines = (widget.stack?.toString().split('\n') ?? const [])
         .where((line) => line.trim().isNotEmpty)
         .take(30)
