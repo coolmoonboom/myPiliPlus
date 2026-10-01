@@ -351,7 +351,7 @@ class IncrementalRecognizer extends GetxController {
     final tempDir = await getTemporaryDirectory();
     final filePath = path.join(tempDir.path, 'asr_chunk.m4a');
     final file = await File(filePath).writeAsBytes(data);
-    final result = await WhisperController().transcribe(
+    final result = await LocalSubtitleService.transcribeWithModel(
       model: model ?? WhisperModel.base,
       audioPath: file.path,
       lang: 'fr',
@@ -360,7 +360,7 @@ class IncrementalRecognizer extends GetxController {
       suppressNonSpeechTokens: true,
       keepModelLoaded: true,
     );
-    final raw = result?.transcription.segments ?? [];
+    final raw = result?.segments ?? [];
     final list = <LocalSubtitleSegment>[];
     for (final seg in raw) {
       final text = seg.text.trim();

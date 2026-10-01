@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:PiliPlus/http/init.dart';
 import 'package:dio/dio.dart';
 import 'package:get/get.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
 enum ModelTaskState { idle, downloading, paused, done }
@@ -50,16 +52,65 @@ class ModelManager {
 
   String _key(WhisperModel model) => model.modelName;
 
+  /// 模型文件存放目录。
+  ///
+  /// Android 10+ 放到用户可见的 Download/piliplus_models（便于导出/导入/管理）；
+  /// 其余平台（含 iOS/macOS 沙盒）回退到应用私有目录。
+  static Future<Directory> _baseDir() async {
+    if (Platform.isIOS || Platform.isMacOS) {
+      return await getLibraryDirectory();
+    }
+    return await getApplicationSupportDirectory();
+  }
+
+  static Future<Directory> _modelDir() async {
+    if (Platform.isAndroid) {
+      try {
+        final downloads = await getDownloadsDirectory();
+        if (downloads != null) {
+          final dir = Directory('${downloads.path}/piliplus_models');
+          await dir.create(recursive: true);
+          return dir;
+        }
+      } catch (_) {}
+    }
+    final base = await _baseDir();
+    return Directory('${base.path}/whisper_models');
+  }
+
   Future<void> _initStates() async {
     for (final model in managedModels) {
-      final path = await WhisperController().getPath(model);
+      await _migrate(model);
+      final path = await pathOf(model);
       if (await File(path).exists()) {
         states[_key(model)] = ModelState.downloaded;
       }
     }
   }
 
-  Future<String> pathOf(WhisperModel model) => WhisperController().getPath(model);
+  /// 把历史版本下载到应用私有目录的模型迁移到新目录（旧的删掉以释放空间）。
+  Future<void> _migrate(WhisperModel model) async {
+    final oldPath = await WhisperController().getPath(model);
+    final newPath = await pathOf(model);
+    if (oldPath == newPath) {
+      return;
+    }
+    try {
+      final oldFile = File(oldPath);
+      if (await oldFile.exists() && !await File(newPath).exists()) {
+        await oldFile.copy(newPath);
+        await oldFile.delete();
+      }
+      final oldPart = File('$oldPath.part');
+      if (await oldPart.exists() && !await File('$newPath.part').exists()) {
+        await oldPart.copy('$newPath.part');
+        await oldPart.delete();
+      }
+    } catch (_) {}
+  }
+
+  Future<String> pathOf(WhisperModel model) async =>
+      '${(await _modelDir()).path}/ggml-${model.modelName}.bin';
 
   Future<String> _partPath(WhisperModel model) async =>
       '${await pathOf(model)}.part';
@@ -114,6 +165,7 @@ class ModelManager {
     final key = _key(model);
     final cancelToken = CancelToken();
     _cancelTokens[key] = cancelToken;
+    await _migrate(model);
     final path = await pathOf(model);
     final partFile = File(await _partPath(model));
     final file = File(path);
@@ -249,5 +301,64 @@ class ModelManager {
       await part.delete();
     }
     states.remove(key);
+  }
+
+  /// 导出模型：返回模型文件路径（Android 上位于 Download/piliplus_models，
+  /// 用户可直接访问/分享）；未下载返回 null。
+  Future<String?> exportModelPath(WhisperModel model) async {
+    final file = File(await pathOf(model));
+    return await file.exists() ? file.path : null;
+  }
+
+  /// 导入模型：把 [sourceFile]（文件名须为 ggml-<name>.bin）复制到识别目录。
+  ///
+  /// 返回导入的模型；文件不匹配返回 null。
+  Future<WhisperModel?> importModel(File sourceFile) async {
+    final name = p.basename(sourceFile.path);
+    for (final model in managedModels) {
+      if ('ggml-${model.modelName}.bin' != name) {
+        continue;
+      }
+      await _migrate(model);
+      final target = await pathOf(model);
+      await sourceFile.copy(target);
+      states[_key(model)] = ModelState.downloaded;
+      return model;
+    }
+    return null;
+  }
+
+  /// 扫描 Download 及模型目录下的 ggml-*.bin 文件，作为可导入的候选。
+  Future<List<File>> importCandidates() async {
+    final seen = <String>{};
+    final result = <File>[];
+    final dirs = <Directory>[];
+    dirs.add(await _modelDir());
+    if (Platform.isAndroid) {
+      try {
+        final d = await getDownloadsDirectory();
+        if (d != null) {
+          dirs.add(d);
+        }
+      } catch (_) {}
+    }
+    for (final dir in dirs) {
+      if (!await dir.exists()) {
+        continue;
+      }
+      await for (final e in dir.list(recursive: false)) {
+        if (e is! File) {
+          continue;
+        }
+        final base = p.basename(e.path);
+        if (!base.startsWith('ggml-') || !base.endsWith('.bin')) {
+          continue;
+        }
+        if (seen.add(e.path)) {
+          result.add(e);
+        }
+      }
+    }
+    return result;
   }
 }

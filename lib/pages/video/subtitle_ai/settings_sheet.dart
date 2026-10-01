@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
@@ -11,6 +13,8 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' as p;
+import 'package:share_plus/share_plus.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
 /// 在视频页之上显示字幕相关面板。
@@ -83,7 +87,10 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
                 ),
               ),
               const SizedBox(height: 12),
-              ModelSelector(modelManager: ModelManager.instance),
+              ModelSelector(
+                modelManager: ModelManager.instance,
+                playerController: widget.videoDetailController.plPlayerController,
+              ),
               const Divider(height: 28),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -137,9 +144,14 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
 }
 
 class ModelSelector extends StatefulWidget {
-  const ModelSelector({required this.modelManager, super.key});
+  const ModelSelector({
+    required this.modelManager,
+    required this.playerController,
+    super.key,
+  });
 
   final ModelManager modelManager;
+  final PlPlayerController playerController;
 
   @override
   State<ModelSelector> createState() => _ModelSelectorState();
@@ -186,7 +198,47 @@ class _ModelSelectorState extends State<ModelSelector> {
             return _buildRow(context, model, state);
           });
         }),
+        const SizedBox(height: 4),
+        TextButton.icon(
+          onPressed: _pickImport,
+          icon: const Icon(Icons.file_download_outlined, size: 18),
+          label: const Text('从 Download 导入模型'),
+          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4)),
+        ),
       ],
+    );
+  }
+
+  Future<void> _export(WhisperModel model) async {
+    final path = await widget.modelManager.exportModelPath(model);
+    if (path == null) {
+      SmartDialog.showToast('模型尚未下载');
+      return;
+    }
+    await SharePlus.instance.share(ShareParams(files: [XFile(path)]));
+  }
+
+  Future<void> _pickImport() async {
+    final candidates = await widget.modelManager.importCandidates();
+    if (candidates.isEmpty) {
+      SmartDialog.showToast('未在 Download 目录找到 ggml-*.bin 模型文件');
+      return;
+    }
+    showSubtitleBottomSheet(
+      context,
+      playerController: widget.playerController,
+      child: _ImportPicker(
+        files: candidates,
+        onPick: (file) async {
+          final model = await widget.modelManager.importModel(file);
+          if (model != null) {
+            SmartDialog.showToast('已导入 ${model.modelName} 模型');
+          } else {
+            SmartDialog.showToast('导入失败：模型文件名需为 ggml-<name>.bin');
+          }
+          Get.back();
+        },
+      ),
     );
   }
 
@@ -234,7 +286,19 @@ class _ModelSelectorState extends State<ModelSelector> {
                   ),
                 const SizedBox(width: 8),
                 if (state.state == ModelTaskState.done)
-                  const Text('已下载', style: TextStyle(color: Colors.green))
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('已下载', style: TextStyle(color: Colors.green)),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: '导出模型文件',
+                        icon: const Icon(Icons.ios_share, size: 16),
+                        onPressed: () => _export(model),
+                      ),
+                    ],
+                  )
                 else ...[
                   TextButton(
                     onPressed: state.state == ModelTaskState.downloading
@@ -278,6 +342,71 @@ class _ModelSelectorState extends State<ModelSelector> {
                   color: theme.colorScheme.error,
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ImportPicker extends StatelessWidget {
+  const _ImportPicker({required this.files, required this.onPick});
+
+  final List<File> files;
+  final Future<void> Function(File file) onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: SizedBox(
+        height: 360,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(
+                '选择要导入的模型文件',
+                style: theme.textTheme.titleMedium,
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                itemCount: files.length,
+                itemBuilder: (context, i) {
+                  final f = files[i];
+                  return InkWell(
+                    onTap: () => onPick(f),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            p.basename(f.path),
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            f.path,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
           ],
         ),
       ),

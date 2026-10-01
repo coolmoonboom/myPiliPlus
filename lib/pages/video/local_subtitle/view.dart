@@ -114,7 +114,10 @@ class _LocalSubtitleViewState extends State<LocalSubtitleView> {
             ),
           ),
           const SizedBox(height: 20),
-          ModelSelector(modelManager: ModelManager.instance),
+          ModelSelector(
+            modelManager: ModelManager.instance,
+            playerController: widget.plPlayerController,
+          ),
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,

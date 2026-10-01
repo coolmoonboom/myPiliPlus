@@ -4,10 +4,12 @@ import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/models_new/video/video_play_info/subtitle.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
+import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/subtitle_utils.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
@@ -109,7 +111,48 @@ abstract final class LocalSubtitleService {
 
   /// 下载 whisper 模型（如已缓存则直接返回路径）。
   static Future<void> ensureModel(WhisperModel model) {
-    return WhisperController().downloadModel(model);
+    return ModelManager.instance.ensure(model);
+  }
+
+  /// 用指定模型文件路径执行转写。
+  ///
+  /// 与 WhisperController.transcribe 等价，但模型路径取自
+  /// [ModelManager.pathOf]（Android 上位于 Download，用户可导出/导入）。
+  static Future<WhisperTranscribeResponse?> transcribeWithModel({
+    required WhisperModel model,
+    required String audioPath,
+    String lang = 'fr',
+    String? initialPrompt,
+    bool noContext = false,
+    bool suppressNonSpeechTokens = false,
+    bool withSegments = false,
+    bool splitOnWord = false,
+    bool keepModelLoaded = false,
+    void Function(int percent)? onProgress,
+  }) async {
+    final modelPath = await ModelManager.instance.pathOf(model);
+    try {
+      return await Whisper(model: model).transcribe(
+        transcribeRequest: TranscribeRequest(
+          audio: audioPath,
+          language: lang,
+          isTranslate: false,
+          isNoTimestamps: !withSegments,
+          splitOnWord: splitOnWord,
+          isRealtime: true,
+          diarize: false,
+          initialPrompt: initialPrompt,
+          noContext: noContext,
+          suppressNonSpeechTokens: suppressNonSpeechTokens,
+          keepModelLoaded: keepModelLoaded,
+        ),
+        modelPath: modelPath,
+        onProgress: onProgress,
+      );
+    } catch (e) {
+      debugPrint('whisper transcribe error: $e');
+      return null;
+    }
   }
 
   /// 执行识别并生成字幕分段。
@@ -146,7 +189,7 @@ abstract final class LocalSubtitleService {
     }
 
     onStage?.call('识别中');
-    final result = await WhisperController().transcribe(
+    final result = await transcribeWithModel(
       model: model,
       audioPath: audioPath,
       lang: 'fr',
@@ -158,7 +201,7 @@ abstract final class LocalSubtitleService {
     if (result == null) {
       return const Error('识别失败');
     }
-    final rawSegments = result.transcription.segments ?? [];
+    final rawSegments = result.segments ?? [];
     if (rawSegments.isEmpty) {
       return const Error('未识别到语音内容');
     }
