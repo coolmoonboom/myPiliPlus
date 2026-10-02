@@ -95,7 +95,7 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - gh workflow run 省略 tag 时，build.yml 的 Release 步骤被跳过，只跑 upload-artifact；不会自动生成 Release 资产。
   - 取产物：`gh api repos/coolmoonboom/myPiliPlus/actions/artifacts/<artifact_id>/zip`（返回的就是 APK 字节；`gh run download` 会把它解成目录）。artifact_id 用 `gh api .../runs/<run_id>/artifacts --jq '.artifacts[]|select(.name|contains("arm64"))|.id'` 取。
-  - 上传：`gh release upload 2.3.0 <apk> --repo coolmoonboom/myPiliPlus`（同名已存在加 --clobber）。
+  - 上传：`gh release upload 2.3.0 <apk> --repo coolmoonboom/myPiliPlus`（同名已存在加 --clobber）。若改用 curl POST `uploads.github.com/.../assets?name=...`，文件名里的 `+` 必须写成 `%2B`，否则被 query 解析成空格、资产名被 mangled 且下载 404；上传后必须 curl 验证下载 URL 可访问再交付。
   - gh 认证 token 易过期（HTTP 401 Bad credentials）；用 `printf 'protocol=https\nhost=github.com\n\n' | git credential fill` 取 password 后 `gh auth login --with-token` 重新登录即可。
 
 [新 UI 必须用 material_ui 主题体系；视频页弹层走 PageUtils.showVideoBottomSheet]
