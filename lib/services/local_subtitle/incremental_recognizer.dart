@@ -31,8 +31,13 @@ class IncrementalRecognizer extends GetxController {
   /// 顺序识别（不跟随播放）时每段的时长（秒）
   static const int chunkSeconds = 40;
 
-  /// 跟随播放时，识别窗口覆盖播放位置前后各 20 秒
+  /// 跟随播放时，识别窗口向后回看当前位置前的秒数（覆盖前文给全字幕）
   static const int halfWindowSeconds = 20;
+
+  /// 跟随播放时，每次新识别窗口向前覆盖的秒数。
+  ///
+  /// 前向少取一些，每段音频更短，识别更快跟上播放位置（避免长时间看不到字幕）。
+  static const int followLookaheadSeconds = 8;
 
   final RxList<LocalSubtitleSegment> segments = <LocalSubtitleSegment>[].obs;
   final RxString status = ''.obs;
@@ -61,7 +66,7 @@ class IncrementalRecognizer extends GetxController {
   /// 跟随播放模式下已识别到的最远秒数（增量追加，避免重复转写）
   double _recognizedEnd = 0;
 
-  /// 音频流的 timescale（来自 mvhd），用于把 fragment 的解码时间换算为秒
+  /// 音频流的媒体 timescale（来自 mdhd/mvhd），用于把 tfdt 解码时间换算为秒
   int _timescale = 0;
 
   double get _bytesPerSecond {
@@ -77,9 +82,11 @@ class IncrementalRecognizer extends GetxController {
     if (running.value) {
       return;
     }
-    SubtitleDebugLog.instance.log('开始识别 fromSeconds=$fromSeconds '
-        'totalSeconds=$totalSeconds follow=$followPlayback '
-        'model=${model?.modelName ?? 'null'}');
+    SubtitleDebugLog.instance.log(
+      '开始识别 fromSeconds=$fromSeconds '
+      'totalSeconds=$totalSeconds follow=$followPlayback '
+      'model=${model?.modelName ?? 'null'}',
+    );
     running.value = true;
     status.value = '准备音频';
     _cancelled = false;
@@ -155,8 +162,9 @@ class IncrementalRecognizer extends GetxController {
       'totalBytes=$_totalBytes 收到=${probeRes.data?.length ?? 0}B',
     );
     final probeBytes = Uint8List.fromList(probeRes.data ?? const []);
-    var moof = _indexOf(probeBytes, const [0x6D, 0x6F, 0x6F, 0x66], 0);
-    var initLen = moof;
+    var src = probeBytes;
+    var moofType = _findMoofType(src, 0);
+    var initLen = moofType >= 4 ? moofType - 4 : moofType;
     if (initLen < 0) {
       // moov 可能超出探针范围，扩大探测
       final res = await Request.dio.get<List<int>>(
@@ -169,21 +177,17 @@ class IncrementalRecognizer extends GetxController {
           receiveTimeout: const Duration(seconds: 30),
         ),
       );
-      final bytes = Uint8List.fromList(res.data ?? const []);
-      moof = _indexOf(bytes, const [0x6D, 0x6F, 0x6F, 0x66], 0);
-      initLen = moof;
+      src = Uint8List.fromList(res.data ?? const []);
+      moofType = _findMoofType(src, 0);
+      initLen = moofType >= 4 ? moofType - 4 : moofType;
       if (initLen < 0) {
-        initLen = bytes.length;
+        initLen = src.length;
       }
-      SubtitleDebugLog.instance.log(
-        '扩大探测: 收到=${bytes.length}B moof=$moof',
-      );
+      SubtitleDebugLog.instance.log('扩大探测: 收到=${src.length}B moof=$moofType');
     }
-    if (initLen > 0) {
-      _initHeader = initLen <= probeBytes.length
-          ? Uint8List.sublistView(probeBytes, 0, initLen)
-          : Uint8List(0);
-    }
+    _initHeader = initLen > 0
+        ? Uint8List.sublistView(src, 0, initLen)
+        : Uint8List(0);
     if (_initHeader == null || _initHeader!.isEmpty) {
       throw '无法解析音频流';
     }
@@ -193,18 +197,68 @@ class IncrementalRecognizer extends GetxController {
     );
   }
 
-  /// 解析 init segment（moov）中 mvhd 的 timescale。
+  /// 解析 init segment（moov）的媒体 timescale。
+  ///
+  /// 优先取音轨的 [mdhd]（trak→mdia→mdhd），音频通常是 48000，tfdt 的
+  /// baseMediaDecodeTime 用的就是它；取不到再退回 mvhd（movie timescale）。
   void _parseTimescale(Uint8List init) {
     final moov = _findBoxContent(init, 'moov');
     if (moov == null) {
+      return;
+    }
+    final mdhd = _findBoxContentRecursive(init, moov, init.length, 'mdhd');
+    if (mdhd != null && mdhd + 12 <= init.length) {
+      // mdhd content: version+flags(4) creation(4) modification(4) timescale(4)
+      _timescale = _readU32(init, mdhd + 12);
       return;
     }
     final mvhd = _findBoxContent(init, 'mvhd', start: moov);
     if (mvhd == null || mvhd + 12 > init.length) {
       return;
     }
-    // mvhd content: version+flags(4) creation(4) modification(4) timescale(4)
     _timescale = _readU32(init, mvhd + 12);
+  }
+
+  /// 在 [start, end) 内递归查找 type 为 [type] 的 box，返回其内容起始偏移。
+  int? _findBoxContentRecursive(
+    Uint8List data,
+    int start,
+    int end,
+    String type,
+  ) {
+    const containers = {
+      'moov',
+      'trak',
+      'mdia',
+      'minf',
+      'stbl',
+      'dinf',
+      'edts',
+      'udta',
+    };
+    var off = start;
+    while (off + 8 <= end && off + 8 <= data.length) {
+      final size = _readU32(data, off);
+      if (size < 8) {
+        return null;
+      }
+      final boxEnd = off + size;
+      if (boxEnd > data.length) {
+        return null;
+      }
+      final t = String.fromCharCodes(data.sublist(off + 4, off + 8));
+      if (t == type) {
+        return off + 8;
+      }
+      if (containers.contains(t)) {
+        final sub = _findBoxContentRecursive(data, off + 8, boxEnd, type);
+        if (sub != null) {
+          return sub;
+        }
+      }
+      off += size;
+    }
+    return null;
   }
 
   /// 最外层查找指定类型 box，返回其内容起始偏移。
@@ -224,16 +278,23 @@ class IncrementalRecognizer extends GetxController {
     return null;
   }
 
-  /// 解析 [moofOffset] 所在 moof 里 first traf 的 tfdt（baseMediaDecodeTime）。
+  /// 解析 [moofTypeOffset]（'moof' 类型标识偏移）所在 moof 里 first traf 的
+  /// tfdt（baseMediaDecodeTime）。
   ///
+  /// box 起始偏移 = 类型标识偏移 - 4（前面是 32 位 size 字段）。
   /// 返回媒体时间刻度值（需除以 [_timescale] 得到秒）；解析失败返回 null。
-  int? _moofStartTime(Uint8List data, int moofOffset) {
-    if (_timescale <= 0 || moofOffset < 0 || moofOffset + 16 > data.length) {
+  int? _moofStartTime(Uint8List data, int moofTypeOffset) {
+    if (_timescale <= 0 || moofTypeOffset < 4) {
       return null;
     }
-    final moofSize = _readU32(data, moofOffset);
-    final moofEnd = moofSize == 0 ? data.length : moofOffset + moofSize;
-    var off = moofOffset + 8;
+    final boxStart = moofTypeOffset - 4;
+    if (boxStart + 16 > data.length) {
+      return null;
+    }
+    final moofSize = _readU32(data, boxStart);
+    final moofEnd = moofSize == 0 ? data.length : boxStart + moofSize;
+    // moof children（mfhd/traf…）从 box 内容起始开始
+    var off = boxStart + 8;
     while (off + 8 <= data.length && off + 8 <= moofEnd) {
       final size = _readU32(data, off);
       if (size < 8) {
@@ -241,7 +302,8 @@ class IncrementalRecognizer extends GetxController {
       }
       final type = String.fromCharCodes(data.sublist(off + 4, off + 8));
       if (type == 'traf') {
-        final t = _findTfdt(data, off, off + size);
+        final trafEnd = (off + size).clamp(0, data.length);
+        final t = _findTfdt(data, off, trafEnd);
         if (t != null) {
           return t;
         }
@@ -251,8 +313,8 @@ class IncrementalRecognizer extends GetxController {
     return null;
   }
 
-  int? _findTfdt(Uint8List data, int trafStart, int trafEnd) {
-    var off = trafStart + 8;
+  int? _findTfdt(Uint8List data, int trafBoxStart, int trafEnd) {
+    var off = trafBoxStart + 8;
     while (off + 8 <= data.length && off + 8 <= trafEnd) {
       final size = _readU32(data, off);
       if (size < 8) {
@@ -321,10 +383,10 @@ class IncrementalRecognizer extends GetxController {
     }
   }
 
-  /// 跟随播放：以当前播放位置为中心，保持识别窗口覆盖到「当前位置 + 20 秒」。
+  /// 跟随播放：以当前播放位置为中心，保持识别窗口覆盖到「当前位置 + 8 秒」。
   ///
   /// 播放前进后只追加识别新增区间（增量），已处理部分不再重复转写；
-  /// 首次启动回看当前位置前 20 秒，形成「前后二十秒」窗口。
+  /// 首次启动回看当前位置前 20 秒，形成「前后窗口」。
   Future<void> _runFollow() async {
     while (!_cancelled) {
       final pos = (positionProvider?.call() ?? _nextChunkStart).clamp(
@@ -334,7 +396,7 @@ class IncrementalRecognizer extends GetxController {
       if (pos >= totalSeconds - 1) {
         break;
       }
-      final winEnd = (pos + halfWindowSeconds).clamp(0, totalSeconds);
+      final winEnd = (pos + followLookaheadSeconds).clamp(0, totalSeconds);
       if (winEnd <= _recognizedEnd) {
         // 播放未前进（暂停/缓冲）：给出明确状态，避免误以为卡死
         if (status.value != '等待播放进度…') {
@@ -422,20 +484,20 @@ class IncrementalRecognizer extends GetxController {
       );
       return _append(segments, abs);
     }
-    // 对齐到段内第一个 moof，丢弃 moof 之前的半截 fragment
-    final moof = _indexOf(slice, const [0x6D, 0x6F, 0x6F, 0x66], 0);
-    final skip = moof > 0 ? moof : 0;
+    // 对齐到段内第一个 moof box：跳过 moof 之前半截 fragment，
+    // 保留从 box 起始（含 4 字节 size 字段）开始的完整 fragment。
+    final moofType = _findMoofType(slice, 0);
+    final boxStart = moofType >= 4 ? moofType - 4 : 0;
+    final skip = boxStart;
     final header = _initHeader!;
     final data = Uint8List(header.length + slice.length - skip);
     data.setRange(0, header.length, header);
     data.setRange(header.length, data.length, slice.sublist(skip));
     // 优先用该 fragment 的 tfdt 解码时间得到精确起点秒数；
     // 解析失败（如非 fMP4 流）再回退到字节偏移估算。
-    final tfdt = moof >= 0 ? _moofStartTime(slice, moof) : null;
-    final t0 = tfdt != null
-        ? tfdt / _timescale
-        : (b0 + skip) / bps;
-    if (tfdt == null && moof >= 0) {
+    final tfdt = moofType >= 4 ? _moofStartTime(slice, moofType) : null;
+    final t0 = tfdt != null ? tfdt / _timescale : (b0 + skip) / bps;
+    if (tfdt == null && moofType >= 4) {
       SubtitleDebugLog.instance.log('tfdt 解析失败，回退字节估算 t0');
     }
     final abs = await _transcribeChunk(s0, data, t0);
@@ -480,9 +542,7 @@ class IncrementalRecognizer extends GetxController {
       );
       if (_consecutiveFailures >= 3) {
         throw Exception(
-          isModelIssue
-              ? '模型加载失败，请在设置中删除并重新下载识别模型'
-              : '连续转写失败，请查看调试日志',
+          isModelIssue ? '模型加载失败，请在设置中删除并重新下载识别模型' : '连续转写失败，请查看调试日志',
         );
       }
       status.value = isModelIssue ? '模型加载失败，见调试日志' : '转写失败，见调试日志';
@@ -490,9 +550,7 @@ class IncrementalRecognizer extends GetxController {
     }
     _consecutiveFailures = 0;
     final raw = result.segments ?? [];
-    SubtitleDebugLog.instance.log(
-      '转写完成 s0=$s0 耗时${cost}ms 原始分段=${raw.length}',
-    );
+    SubtitleDebugLog.instance.log('转写完成 s0=$s0 耗时${cost}ms 原始分段=${raw.length}');
     final list = <LocalSubtitleSegment>[];
     for (final seg in raw) {
       final text = seg.text.trim();
@@ -540,15 +598,22 @@ class IncrementalRecognizer extends GetxController {
     return changed;
   }
 
-  static int _indexOf(Uint8List haystack, List<int> needle, int start) {
-    outer:
-    for (var i = start; i <= haystack.length - needle.length; i++) {
-      for (var j = 0; j < needle.length; j++) {
-        if (haystack[i + j] != needle[j]) {
-          continue outer;
+  /// 在 [data] 中从 [start] 起定位第一个结构合法的 moof box 类型偏移。
+  ///
+  /// 仅当 'moof' 前 4 字节是合理的 box size（>=8 且不越界）才视为真实 box，
+  /// 避免音频载荷里偶然出现的字节组合被误当成 box 头。
+  static int _findMoofType(Uint8List data, int start) {
+    for (var i = start; i + 8 <= data.length; i++) {
+      final t = _readU32(data, i);
+      if (t == 0x6D6F6F66) {
+        final boxStart = i - 4;
+        if (boxStart >= 0) {
+          final size = _readU32(data, boxStart);
+          if (size >= 8 && boxStart + size <= data.length) {
+            return i;
+          }
         }
       }
-      return i;
     }
     return -1;
   }
