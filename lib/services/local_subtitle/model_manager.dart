@@ -351,6 +351,7 @@ class ModelManager {
             if (received > 0) 'Range': 'bytes=$received-',
           },
           validateStatus: (status) => status == 206 || status == 200,
+          connectTimeout: const Duration(seconds: 30),
           receiveTimeout: const Duration(seconds: 60),
         ),
       );

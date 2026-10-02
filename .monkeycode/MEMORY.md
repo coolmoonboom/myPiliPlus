@@ -115,3 +115,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - 识别统一走 LocalSubtitleService.transcribeWithModel（底层 Whisper().transcribe 的 modelPath），实时/整段共用；不要再用 WhisperController().transcribe（它固定用应用私有目录）。
   - ModelManager._migrate 负责把旧私有目录模型拷到新目录并删除旧文件；导出=返回路径供分享，导入=按 ggml-<name>.bin 文件名匹配后 copy 进识别目录。
   - ModelSelector 构造需要 playerController（导出分享/导入 bottom sheet 用），实例化处：settings_sheet.dart 与 local_subtitle/view.dart。
+
+[Dart 陷阱：`&& ... case pattern` 抛 TypeError，必须改用嵌套 if]
+- Date: 2026-10-02
+- Context: Discovered by Agent while 定位「在线翻译一直失败回退词库」：日志每句都抛 `type '_Map<String, dynamic>' is not a subtype of type 'bool'`
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 本项目 Django/混合 Dart 代码里 `if (a is Map && a['k'] case final Map v)` 这类「case 模式紧跟 && 」的写法在运行时会抛 TypeError：`case` 模式作用于整个 if 条件（含前面整个 `&&` 链），导致先求值 `a is Map && a['k']`，右侧是 Map 而非 bool，直接抛 `type 'Map' is not a subtype of type 'bool'`。任何加括号 `(x case P)` 在表达式位置也无法编译。
+  - `expr case P` 只有作为 if/while 条件的**唯一/末尾**守卫时才安全（如 `if (foo() case final x?)`）；一旦前面还有 `&&`，就不要用 case 模式。
+  - 修法：改为嵌套 `if (a is Map) { final v = a['k']; if (v is Map) {...} }`，不用 case 模式。
+  - 排查时可用 `/opt/dart314/dart-sdk/bin/dart` 写最小复现脚本确认行为。

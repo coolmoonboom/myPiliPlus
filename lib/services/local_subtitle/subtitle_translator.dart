@@ -300,13 +300,16 @@ class HttpSubtitleTranslator implements SubtitleTranslator {
           ),
         );
         final data = res.data;
-        if (data is Map && data['responseData'] case final Map rd) {
-          final translated = rd['translatedText']?.toString();
-          if (translated != null && translated.trim().isNotEmpty) {
-            return translated;
+          if (data is Map) {
+            final rd = data['responseData'];
+            if (rd is Map) {
+              final translated = rd['translatedText']?.toString().trim();
+              if (translated != null && translated.isNotEmpty) {
+                return translated;
+              }
+            }
           }
-        }
-        return value;
+          return value;
       }
 
       final res = await Request.dio.post(
@@ -323,21 +326,17 @@ class HttpSubtitleTranslator implements SubtitleTranslator {
           receiveTimeout: const Duration(seconds: 8),
         ),
       );
-      final data = res.data;
-      if (data is Map) {
-        final translated = data['translatedText']?.toString();
-        if (translated != null && translated.trim().isNotEmpty) {
-          return translated;
-        }
-      } else if (data is String && data.isNotEmpty) {
-        try {
-          final decoded = jsonDecode(data);
-          if (decoded is Map && decoded['translatedText'] case final String t) {
-            return t;
+final data = res.data;
+        if (data is Map) {
+          final rd = data['responseData'];
+          if (rd is Map) {
+            final translated = rd['translatedText']?.toString().trim();
+            if (translated != null && translated.isNotEmpty) {
+              return translated;
+            }
           }
-        } catch (_) {}
-      }
-      return value;
+        }
+        return value;
     } catch (e) {
       SubtitleDebugLog.instance.log(
         '在线翻译失败（回退词库）：$value => $e',
