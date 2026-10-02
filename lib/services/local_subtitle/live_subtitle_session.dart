@@ -8,6 +8,7 @@ import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/services/local_subtitle/incremental_recognizer.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
+import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -98,14 +99,20 @@ class LiveSubtitleSession extends GetxController {
     }
     running.value = true;
     stage.value = '检查模型';
+    SubtitleDebugLog.instance.log(
+      '会话开始 url=$url 模型=${_model.modelName} 双语=$_bilingual '
+      '跟随=$_followPlayback',
+    );
     try {
       await _modelManager.ensure(_model);
     } catch (e) {
       running.value = false;
       stage.value = '模型未就绪';
+      SubtitleDebugLog.instance.log('模型就绪失败：$e');
       SmartDialog.showToast('模型下载失败：$e');
       return;
     }
+    SubtitleDebugLog.instance.log('模型就绪：${_model.modelName}');
     if (_closed) {
       return;
     }
@@ -117,9 +124,13 @@ class LiveSubtitleSession extends GetxController {
     if (total <= 0) {
       running.value = false;
       stage.value = '无法获取视频时长';
+      SubtitleDebugLog.instance.log('视频时长始终为 0，放弃识别');
       SmartDialog.showToast('无法获取视频时长，请先播放几秒');
       return;
     }
+    SubtitleDebugLog.instance.log(
+      '视频时长 $total 秒，播放位置 ${plPlayerController.position.value} 秒',
+    );
     final recognizer = IncrementalRecognizer(
       audioUrl: url,
       totalSeconds: total,
@@ -134,6 +145,15 @@ class LiveSubtitleSession extends GetxController {
     recognizer.status.listen((s) {
       if (!_closed) {
         stage.value = s;
+      }
+    });
+    recognizer.running.listen((r) {
+      // 识别器自行结束（到末尾/失败）时同步复位会话运行态，避免 UI 卡在识别中
+      if (!r && running.value) {
+        running.value = false;
+        if (!_closed && stage.value.isEmpty) {
+          stage.value = '识别结束';
+        }
       }
     });
     recognizer.segments.listen((_) => _inject());
@@ -168,6 +188,7 @@ class LiveSubtitleSession extends GetxController {
     _injectTimer?.cancel();
     _injectTimer = null;
     _recognizer?.stop();
+    SubtitleDebugLog.instance.log('会话停止（保留已识别结果）');
     running.value = false;
   }
 

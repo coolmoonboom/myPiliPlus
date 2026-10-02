@@ -5,6 +5,7 @@ import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/models_new/video/video_play_info/subtitle.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
+import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
@@ -131,6 +132,10 @@ abstract final class LocalSubtitleService {
     void Function(int percent)? onProgress,
   }) async {
     final modelPath = await ModelManager.instance.pathOf(model);
+    SubtitleDebugLog.instance.log(
+      'transcribe modelPath=$modelPath 存在='
+      '${await File(modelPath).exists()}',
+    );
     try {
       return await Whisper(model: model).transcribe(
         transcribeRequest: TranscribeRequest(
@@ -151,6 +156,7 @@ abstract final class LocalSubtitleService {
       );
     } catch (e) {
       debugPrint('whisper transcribe error: $e');
+      SubtitleDebugLog.instance.log('whisper transcribe 失败：$e');
       return null;
     }
   }
@@ -230,20 +236,35 @@ abstract final class LocalSubtitleService {
   }
 
   /// 为分段列表生成中文翻译（逐段并发），供增量识别复用。
+  ///
+  /// 每批并发 6、整批最多等 [batchTimeout]；翻译卡住/失败时保留原文，
+  /// 避免拖住识别进度造成「一直识别中」。
   static Future<List<LocalSubtitleSegment>> translateSegments(
-    List<LocalSubtitleSegment> segments,
-  ) async {
+    List<LocalSubtitleSegment> segments, {
+    Duration batchTimeout = const Duration(seconds: 12),
+  }) async {
     final translator = TranslationService.create();
     const concurrency = 6;
     final results = List<String?>.filled(segments.length, null);
     for (var start = 0; start < segments.length; start += concurrency) {
       final end = (start + concurrency).clamp(0, segments.length);
       final batch = segments.sublist(start, end);
-      final translations = await Future.wait(
-        batch.map((seg) => translator.translate(seg.text)),
+      final translations = await Future.wait<String>(
+        batch.map((seg) async {
+          try {
+            return await translator.translate(seg.text);
+          } catch (_) {
+            return '';
+          }
+        }),
+      ).timeout(
+        batchTimeout,
+        onTimeout: () => List<String>.filled(batch.length, ''),
       );
       for (var i = 0; i < translations.length; i++) {
-        results[start + i] = translations[i];
+        if (translations[i].isNotEmpty) {
+          results[start + i] = translations[i];
+        }
       }
     }
     return [

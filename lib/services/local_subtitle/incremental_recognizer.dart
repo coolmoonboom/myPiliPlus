@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
+import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
 import 'package:dio/dio.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as path;
@@ -72,6 +73,9 @@ class IncrementalRecognizer extends GetxController {
     if (running.value) {
       return;
     }
+    SubtitleDebugLog.instance.log('开始识别 fromSeconds=$fromSeconds '
+        'totalSeconds=$totalSeconds follow=$followPlayback '
+        'model=${model?.modelName ?? 'null'}');
     running.value = true;
     status.value = '准备音频';
     _cancelled = false;
@@ -92,13 +96,16 @@ class IncrementalRecognizer extends GetxController {
     } catch (e) {
       if (!_cancelled) {
         status.value = '识别失败：$e';
+        SubtitleDebugLog.instance.log('识别失败：$e');
       }
     } finally {
       running.value = false;
       if (!_cancelled && segments.isEmpty) {
         status.value = '未识别到语音内容';
+        SubtitleDebugLog.instance.log('未识别到语音内容');
       } else if (!_cancelled) {
         status.value = '识别完成';
+        SubtitleDebugLog.instance.log('识别完成，共 ${segments.length} 条');
       }
       await WhisperController().releaseModel();
       _cancelToken = null;
@@ -129,6 +136,10 @@ class IncrementalRecognizer extends GetxController {
     } else if (!_rangeSupported) {
       _totalBytes = probeRes.data?.length;
     }
+    SubtitleDebugLog.instance.log(
+      '探测: status=$statusCode range支持=$_rangeSupported '
+      'totalBytes=$_totalBytes 收到=${probeRes.data?.length ?? 0}B',
+    );
     final probeBytes = Uint8List.fromList(probeRes.data ?? const []);
     var moof = _indexOf(probeBytes, const [0x6D, 0x6F, 0x6F, 0x66], 0);
     var initLen = moof;
@@ -150,6 +161,9 @@ class IncrementalRecognizer extends GetxController {
       if (initLen < 0) {
         initLen = bytes.length;
       }
+      SubtitleDebugLog.instance.log(
+        '扩大探测: 收到=${bytes.length}B moof=$moof',
+      );
     }
     if (initLen > 0) {
       _initHeader = initLen <= probeBytes.length
@@ -160,6 +174,9 @@ class IncrementalRecognizer extends GetxController {
       throw '无法解析音频流';
     }
     _parseTimescale(_initHeader!);
+    SubtitleDebugLog.instance.log(
+      'initHeader=${_initHeader!.length}B timescale=$_timescale',
+    );
   }
 
   /// 解析 init segment（moov）中 mvhd 的 timescale。
@@ -305,13 +322,27 @@ class IncrementalRecognizer extends GetxController {
       }
       final winEnd = (pos + halfWindowSeconds).clamp(0, totalSeconds);
       if (winEnd <= _recognizedEnd) {
+        // 播放未前进（暂停/缓冲）：给出明确状态，避免误以为卡死
+        if (status.value != '等待播放进度…') {
+          status.value = '等待播放进度…（当前位置 ${_fmt(pos)}）';
+          SubtitleDebugLog.instance.log(
+            '等待播放进度: pos=${_fmt(pos)} 已识别到=${_fmt(_recognizedEnd.floor())}',
+          );
+        }
         await Future<void>.delayed(const Duration(milliseconds: 600));
         continue;
       }
       final winStart = _recognizedEnd.floor();
       status.value = '识别 ${_fmt(winStart)}~${_fmt(winEnd)}';
+      final startedAt = DateTime.now();
       try {
         final added = await _processChunk(winStart, winEnd);
+        final cost = DateTime.now().difference(startedAt).inMilliseconds;
+        SubtitleDebugLog.instance.log(
+          '段识别完成 ${_fmt(winStart)}~${_fmt(winEnd)} '
+          '耗时${cost}ms 新增=${added ? '是' : '否'} '
+          '累计${segments.length}条',
+        );
         if (added) {
           segments.refresh();
         }
@@ -322,6 +353,9 @@ class IncrementalRecognizer extends GetxController {
           break;
         }
         status.value = '段 ${_fmt(winStart)} 失败：$e';
+        SubtitleDebugLog.instance.log(
+          '段失败 ${_fmt(winStart)}~${_fmt(winEnd)}：$e',
+        );
         // 失败也推进起点，避免死循环反复识别同一段
         _recognizedEnd = winEnd.toDouble();
         _nextChunkStart = winEnd;
@@ -354,6 +388,10 @@ class IncrementalRecognizer extends GetxController {
       return false;
     }
     var slice = Uint8List.fromList(res.data ?? const []);
+    SubtitleDebugLog.instance.log(
+      '分段请求 [$s0-$s1]s bytes=$b0-$rangeEnd '
+      'status=${res.statusCode} 收到=${slice.length}B bps=${bps.toStringAsFixed(1)}',
+    );
     if (slice.isEmpty) {
       throw '音频分段下载失败';
     }
@@ -383,6 +421,9 @@ class IncrementalRecognizer extends GetxController {
     final t0 = tfdt != null
         ? tfdt / _timescale
         : (b0 + skip) / bps;
+    if (tfdt == null && moof >= 0) {
+      SubtitleDebugLog.instance.log('tfdt 解析失败，回退字节估算 t0');
+    }
     final abs = await _transcribeChunk(s0, data, t0);
     return _append(segments, abs);
   }
@@ -396,6 +437,11 @@ class IncrementalRecognizer extends GetxController {
     final tempDir = await getTemporaryDirectory();
     final filePath = path.join(tempDir.path, 'asr_chunk.m4a');
     final file = await File(filePath).writeAsBytes(data);
+    final startedAt = DateTime.now();
+    SubtitleDebugLog.instance.log(
+      '转写开始 s0=$s0 t0=${t0.toStringAsFixed(2)} 音频${data.length}B '
+      '模型=${model?.modelName ?? 'base'}',
+    );
     final result = await LocalSubtitleService.transcribeWithModel(
       model: model ?? WhisperModel.base,
       audioPath: file.path,
@@ -404,8 +450,17 @@ class IncrementalRecognizer extends GetxController {
       noContext: true,
       suppressNonSpeechTokens: true,
       keepModelLoaded: true,
+      onProgress: (p) {
+        if (!_cancelled) {
+          status.value = '识别 ${_fmt(s0)} $p%';
+        }
+      },
     );
+    final cost = DateTime.now().difference(startedAt).inMilliseconds;
     final raw = result?.segments ?? [];
+    SubtitleDebugLog.instance.log(
+      '转写完成 s0=$s0 耗时${cost}ms 原始分段=${raw.length}',
+    );
     final list = <LocalSubtitleSegment>[];
     for (final seg in raw) {
       final text = seg.text.trim();
@@ -420,7 +475,14 @@ class IncrementalRecognizer extends GetxController {
       list.add(LocalSubtitleSegment(from: from, to: to, text: text));
     }
     if (bilingual && list.isNotEmpty) {
-      return LocalSubtitleService.translateSegments(list);
+      final t0ms = DateTime.now().millisecondsSinceEpoch;
+      final translated = await LocalSubtitleService.translateSegments(list);
+      SubtitleDebugLog.instance.log(
+        '翻译完成 s0=$s0 耗时'
+        '${DateTime.now().millisecondsSinceEpoch - t0ms}ms '
+        '${list.length}条',
+      );
+      return translated;
     }
     return list;
   }
@@ -468,6 +530,7 @@ class IncrementalRecognizer extends GetxController {
   /// 停止识别
   void stop() {
     _cancelled = true;
+    SubtitleDebugLog.instance.log('手动停止识别，已识别 ${segments.length} 条');
     _cancelToken?.cancel('stopped');
   }
 
@@ -476,6 +539,7 @@ class IncrementalRecognizer extends GetxController {
     if (!followPlayback || _cancelled) {
       return;
     }
+    SubtitleDebugLog.instance.log('检测到跳转 -> ${_fmt(newPosition)}');
     segments.removeWhere((s) => s.from >= newPosition - 2);
     final pos = newPosition.clamp(0, totalSeconds);
     _nextChunkStart = pos;

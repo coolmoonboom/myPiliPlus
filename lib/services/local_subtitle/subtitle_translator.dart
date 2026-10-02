@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:dio/dio.dart';
 
 /// 字幕翻译器抽象。
 ///
@@ -284,49 +286,64 @@ class HttpSubtitleTranslator implements SubtitleTranslator {
       return value;
     }
     final target = _normalizeTarget(to);
-    if (endpoint == null || endpoint!.isEmpty) {
-      final res = await Request().get(
-        'https://api.mymemory.translated.net/get',
-        queryParameters: {
+    try {
+      if (endpoint == null || endpoint!.isEmpty) {
+        final res = await Request.dio.get(
+          'https://api.mymemory.translated.net/get',
+          queryParameters: {
+            'q': value,
+            'langpair': '$from|$target',
+          },
+          options: Options(
+            connectTimeout: const Duration(seconds: 6),
+            receiveTimeout: const Duration(seconds: 8),
+          ),
+        );
+        final data = res.data;
+        if (data is Map && data['responseData'] case final Map rd) {
+          final translated = rd['translatedText']?.toString();
+          if (translated != null && translated.trim().isNotEmpty) {
+            return translated;
+          }
+        }
+        return value;
+      }
+
+      final res = await Request.dio.post(
+        endpoint!,
+        data: {
           'q': value,
-          'langpair': '$from|$target',
+          'source': from,
+          'target': target,
+          'format': 'text',
+          if (apiKey != null && apiKey!.isNotEmpty) 'api_key': apiKey,
         },
+        options: Options(
+          connectTimeout: const Duration(seconds: 6),
+          receiveTimeout: const Duration(seconds: 8),
+        ),
       );
       final data = res.data;
-      if (data is Map && data['responseData'] case final Map rd) {
-        final translated = rd['translatedText']?.toString();
+      if (data is Map) {
+        final translated = data['translatedText']?.toString();
         if (translated != null && translated.trim().isNotEmpty) {
           return translated;
         }
+      } else if (data is String && data.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(data);
+          if (decoded is Map && decoded['translatedText'] case final String t) {
+            return t;
+          }
+        } catch (_) {}
       }
       return value;
+    } catch (e) {
+      SubtitleDebugLog.instance.log(
+        '在线翻译失败（回退词库）：$value => $e',
+      );
+      return value;
     }
-
-    final res = await Request().post(
-      endpoint!,
-      data: {
-        'q': value,
-        'source': from,
-        'target': target,
-        'format': 'text',
-        if (apiKey != null && apiKey!.isNotEmpty) 'api_key': apiKey,
-      },
-    );
-    final data = res.data;
-    if (data is Map) {
-      final translated = data['translatedText']?.toString();
-      if (translated != null && translated.trim().isNotEmpty) {
-        return translated;
-      }
-    } else if (data is String && data.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map && decoded['translatedText'] case final String t) {
-          return t;
-        }
-      } catch (_) {}
-    }
-    return value;
   }
 
   String _normalizeTarget(String to) {

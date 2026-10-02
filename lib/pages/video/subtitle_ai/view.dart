@@ -59,6 +59,15 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
                 ),
               ),
               IconButton(
+                tooltip: '调试日志',
+                icon: const Icon(Icons.bug_report_outlined, size: 20),
+                onPressed: () => showSubtitleBottomSheet(
+                  context,
+                  playerController: ctr.plPlayerController,
+                  child: const SubtitleDebugLogSheet(),
+                ),
+              ),
+              IconButton(
                 tooltip: '保存为 SRT',
                 icon: const Icon(Icons.save_alt, size: 20),
                 onPressed: session.exportSrt,
