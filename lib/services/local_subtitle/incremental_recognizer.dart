@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -31,8 +32,10 @@ class IncrementalRecognizer extends GetxController {
   /// 顺序识别（不跟随播放）时每段的时长（秒）
   static const int chunkSeconds = 40;
 
-  /// 跟随播放时，识别窗口向后回看当前位置前的秒数（覆盖前文给全字幕）
-  static const int halfWindowSeconds = 20;
+  /// 跟随播放时，识别窗口向后回看当前位置前的秒数（覆盖前文给全字幕）。
+  ///
+  /// 回看越多首段越长、首条字幕出得越慢，权衡后取 10 秒。
+  static const int halfWindowSeconds = 10;
 
   /// 跟随播放时，每次新识别窗口向前覆盖的秒数。
   ///
@@ -80,11 +83,21 @@ class IncrementalRecognizer extends GetxController {
     return total / totalSeconds;
   }
 
+  /// 当前活跃的识别器：只有它能在结束时释放原生模型，
+  /// 避免「停止后立刻重新开始」时旧会话的 releaseModel 把新会话刚加载的
+  /// 模型释放掉，导致新转写调用永久挂起（现象：进度卡在 0% 不动）。
+  static IncrementalRecognizer? _active;
+  final Completer<void> _doneCompleter = Completer<void>();
+
+  /// 识别流程完全结束（含资源释放）后完成，供会话串行化重启。
+  Future<void> get done => _doneCompleter.future;
+
   /// 开始识别；[fromSeconds] 起始位置（默认当前播放位置）
   Future<void> start({int? fromSeconds}) async {
     if (running.value) {
       return;
     }
+    _active = this;
     SubtitleDebugLog.instance.log(
       '开始识别 fromSeconds=$fromSeconds '
       'totalSeconds=$totalSeconds follow=$followPlayback '
@@ -98,7 +111,7 @@ class IncrementalRecognizer extends GetxController {
       totalSeconds,
     );
     _nextChunkStart = startPos;
-    // 跟随播放：识别窗口回看当前位置前 20 秒（「前后二十秒」）
+    // 跟随播放：识别窗口回看当前位置前若干秒，尽快出首条字幕
     _recognizedEnd = (startPos - halfWindowSeconds)
         .clamp(0, totalSeconds)
         .toDouble();
@@ -131,8 +144,17 @@ class IncrementalRecognizer extends GetxController {
         status.value = '识别完成';
         SubtitleDebugLog.instance.log('识别完成，共 ${segments.length} 条');
       }
-      await WhisperController().releaseModel();
+      // 仅当自己仍是当前活跃识别器时才释放原生模型，避免竞态释放新会话模型
+      if (identical(_active, this)) {
+        _active = null;
+        await WhisperController().releaseModel();
+      } else {
+        SubtitleDebugLog.instance.log('跳过 releaseModel：已有新的识别会话');
+      }
       _cancelToken = null;
+      if (!_doneCompleter.isCompleted) {
+        _doneCompleter.complete();
+      }
     }
   }
 
@@ -389,7 +411,7 @@ class IncrementalRecognizer extends GetxController {
   /// 跟随播放：以当前播放位置为中心，保持识别窗口覆盖到「当前位置 + 8 秒」。
   ///
   /// 播放前进后只追加识别新增区间（增量），已处理部分不再重复转写；
-  /// 首次启动回看当前位置前 20 秒，形成「前后窗口」。
+  /// 首次启动回看当前位置前 halfWindowSeconds 秒，形成「前后窗口」。
   Future<void> _runFollow() async {
     while (!_cancelled) {
       final pos = (positionProvider?.call() ?? _nextChunkStart).clamp(
@@ -521,20 +543,40 @@ class IncrementalRecognizer extends GetxController {
       '转写开始 s0=$s0 t0=${t0.toStringAsFixed(2)} 音频${data.length}B '
       '模型=${model?.modelName ?? 'base'}',
     );
-    final result = await LocalSubtitleService.transcribeWithModel(
-      model: model ?? WhisperModel.base,
-      audioPath: file.path,
-      lang: 'fr',
-      withSegments: true,
-      noContext: true,
-      suppressNonSpeechTokens: true,
-      keepModelLoaded: true,
-      onProgress: (p) {
-        if (!_cancelled) {
-          status.value = '识别 ${_fmt(s0)} $p%';
-        }
-      },
-    );
+    // 心跳：转写进度回调粒度很粗（首尾才更新），期间显示已耗时秒数，
+    // 让用户看到识别在进行中，而不是误以为卡在 0%
+    var pct = -1;
+    final ticker = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_cancelled) {
+        return;
+      }
+      final sec = DateTime.now().difference(startedAt).inSeconds;
+      status.value = pct >= 0
+          ? '识别 ${_fmt(s0)} ${pct}% 已用${sec}s'
+          : '识别 ${_fmt(s0)} 已用${sec}s 出结果稍候';
+    });
+    late final WhisperTranscribeResponse? result;
+    try {
+      // 看门狗：单段转写超过 4 分钟视为挂起，按失败跳过，绝不永久卡住
+      result = await LocalSubtitleService.transcribeWithModel(
+        model: model ?? WhisperModel.base,
+        audioPath: file.path,
+        lang: 'fr',
+        withSegments: true,
+        noContext: true,
+        suppressNonSpeechTokens: true,
+        keepModelLoaded: true,
+        onProgress: (p) {
+          pct = p;
+        },
+      ).timeout(const Duration(seconds: 240));
+    } on TimeoutException {
+      result = null;
+      LocalSubtitleService.lastTranscribeError = 'timeout';
+      SubtitleDebugLog.instance.log('转写超时 s0=$s0（>240s），跳过该段');
+    } finally {
+      ticker.cancel();
+    }
     final cost = DateTime.now().difference(startedAt).inMilliseconds;
     if (result == null) {
       _consecutiveFailures++;

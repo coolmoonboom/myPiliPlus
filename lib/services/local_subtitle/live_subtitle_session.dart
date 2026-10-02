@@ -131,6 +131,21 @@ class LiveSubtitleSession extends GetxController {
     SubtitleDebugLog.instance.log(
       '视频时长 $total 秒，播放位置 ${plPlayerController.position.value} 秒',
     );
+    // 串行化重启：等旧的识别循环（含可能的原生转写挂起）彻底退出，
+    // 避免新旧会话同时操作原生模型导致新转写永久卡死（进度卡 0%）
+    final old = _recognizer;
+    if (old != null) {
+      old.stop();
+      var finishedInTime = true;
+      try {
+        await old.done.timeout(const Duration(seconds: 270));
+      } on TimeoutException {
+        finishedInTime = false;
+      }
+      SubtitleDebugLog.instance.log(
+        finishedInTime ? '旧识别循环已退出，启动新会话' : '旧识别循环超时未退出，强制启动新会话',
+      );
+    }
     final recognizer = IncrementalRecognizer(
       audioUrl: url,
       totalSeconds: total,
