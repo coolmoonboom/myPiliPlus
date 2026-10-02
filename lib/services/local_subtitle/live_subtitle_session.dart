@@ -136,6 +136,7 @@ class LiveSubtitleSession extends GetxController {
     final old = _recognizer;
     if (old != null) {
       old.stop();
+      stage.value = '整理上一轮识别';
       var finishedInTime = true;
       try {
         await old.done.timeout(const Duration(seconds: 270));
