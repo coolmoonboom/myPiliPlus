@@ -63,6 +63,9 @@ class IncrementalRecognizer extends GetxController {
   /// 连续转写失败次数，达到阈值直接报错退出，避免无限「识别中」
   int _consecutiveFailures = 0;
 
+  /// 后台翻译串行队列：翻译不再阻塞识别循环，识别先出原文、中文后台补齐
+  Future<void> _backgroundTranslations = Future<void>.value();
+
   /// 跟随播放模式下已识别到的最远秒数（增量追加，避免重复转写）
   double _recognizedEnd = 0;
 
@@ -565,16 +568,55 @@ class IncrementalRecognizer extends GetxController {
       list.add(LocalSubtitleSegment(from: from, to: to, text: text));
     }
     if (bilingual && list.isNotEmpty) {
-      final t0ms = DateTime.now().millisecondsSinceEpoch;
-      final translated = await LocalSubtitleService.translateSegments(list);
-      SubtitleDebugLog.instance.log(
-        '翻译完成 s0=$s0 耗时'
-        '${DateTime.now().millisecondsSinceEpoch - t0ms}ms '
-        '${list.length}条',
-      );
-      return translated;
+      _translateInBackground(list);
     }
     return list;
+  }
+
+  /// 后台翻译一段识别结果，不阻塞识别循环。
+  ///
+  /// 翻译完成后把 [translated] 的中文写回已追加的 [segments]，上次注入的字幕
+  /// 由调用方定时/增量刷新覆盖为双语。失败时保留原文，不影响字幕显示。
+  void _translateInBackground(List<LocalSubtitleSegment> chunkSegments) {
+    final snapshot = List<LocalSubtitleSegment>.of(chunkSegments);
+    _backgroundTranslations = _backgroundTranslations.then((_) async {
+      if (_cancelled) {
+        return;
+      }
+      final t0ms = DateTime.now().millisecondsSinceEpoch;
+      final translated = await LocalSubtitleService.translateSegments(snapshot);
+      if (_cancelled) {
+        return;
+      }
+      SubtitleDebugLog.instance.log(
+        '后台翻译完成 耗时${DateTime.now().millisecondsSinceEpoch - t0ms}ms '
+        '${translated.length}条',
+      );
+      final expected = snapshot.length;
+      final applied = <int>[];
+      for (final seg in translated) {
+        if (seg.translated == null || seg.translated!.isEmpty) {
+          continue;
+        }
+        for (var i = 0; i < segments.length; i++) {
+          final s = segments[i];
+          if (s.from == seg.from &&
+              s.to == seg.to &&
+              s.text == seg.text &&
+              s.translated == null) {
+            segments[i] = seg;
+            applied.add(i);
+            break;
+          }
+        }
+      }
+      if (applied.isNotEmpty) {
+        segments.refresh();
+        SubtitleDebugLog.instance.log(
+          '后台翻译写回 $expected 条，实际 ${applied.length} 条',
+        );
+      }
+    });
   }
 
   bool _append(
