@@ -7,7 +7,24 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
-enum ModelTaskState { idle, downloading, paused, done }
+enum ModelTaskState { idle, downloading, paused, done, corrupt }
+
+/// 模型文件校验结果（用于诊断「文件存在但加载失败」）。
+class ModelValidation {
+  const ModelValidation({
+    required this.exists,
+    required this.size,
+    this.valid = false,
+    this.magic,
+  });
+
+  final bool exists;
+  final int size;
+  final bool valid;
+
+  /// 文件头 4 字节的十六进制（如 `6c6d6767` = ggml，`47475546` = GGUF）
+  final String? magic;
+}
 
 class ModelState {
   const ModelState({
@@ -50,7 +67,117 @@ class ModelManager {
 
   final Map<String, CancelToken> _cancelTokens = {};
 
+  /// 合法模型文件的最小体积（最小的 tiny 模型也有几十 MB）
+  static const int _minModelBytes = 4 * 1024 * 1024;
+
+  /// 各模型在 HuggingFace `ggerganov/whisper.cpp` 上的标准体积（字节），
+  /// 用于识别下载/迁移过程中被截断的文件。识别时允许 10% 的余量。
+  static const Map<String, int> _expectedBytes = {
+    'tiny': 77691713,
+    'base': 147951465,
+    'small': 487601967,
+    'medium': 1533763059,
+    'large-v3': 3095033483,
+  };
+
+  int _minExpectedBytes(WhisperModel model) {
+    final expected = _expectedBytes[model.modelName] ?? 0;
+    final withMargin = expected - expected ~/ 10;
+    return withMargin > _minModelBytes ? withMargin : _minModelBytes;
+  }
+
+  /// legacy ggml 魔数，小端存储为字节 `6c 6d 67 67`
+  static const List<int> _ggmlMagic = [0x6c, 0x6d, 0x67, 0x67];
+
+  /// 新版 GGUF 魔数，字节 `47 47 55 46`（"GGUF"）
+  static const List<int> _ggufMagic = [0x47, 0x47, 0x55, 0x46];
+
   String _key(WhisperModel model) => model.modelName;
+
+  static bool _matchesMagic(List<int> head) {
+    if (head.length < 4) {
+      return false;
+    }
+    final ggml = head[0] == _ggmlMagic[0] &&
+        head[1] == _ggmlMagic[1] &&
+        head[2] == _ggmlMagic[2] &&
+        head[3] == _ggmlMagic[3];
+    final gguf = head[0] == _ggufMagic[0] &&
+        head[1] == _ggufMagic[1] &&
+        head[2] == _ggufMagic[2] &&
+        head[3] == _ggufMagic[3];
+    return ggml || gguf;
+  }
+
+  static String? _hexMagic(List<int> head) {
+    if (head.length < 4) {
+      return null;
+    }
+    return head
+        .take(4)
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+  }
+
+  /// 仅检查文件头魔数（用于断点续传的 `.part` 前缀文件）。
+  Future<bool> _hasValidMagic(File file) async {
+    try {
+      if (!await file.exists()) {
+        return false;
+      }
+      final raf = await file.open();
+      try {
+        return _matchesMagic(await raf.read(4));
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 完整校验：存在、体积达标、魔数正确。
+  Future<bool> _isValidModelFile(
+    File file, {
+    int minBytes = _minModelBytes,
+  }) async {
+    try {
+      if (!await file.exists() || await file.length() < minBytes) {
+        return false;
+      }
+      return await _hasValidMagic(file);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 校验某模型文件（供识别前诊断与调试日志使用）。
+  Future<ModelValidation> validate(WhisperModel model) async {
+    final file = File(await pathOf(model));
+    if (!await file.exists()) {
+      return const ModelValidation(exists: false, size: 0);
+    }
+    final size = await file.length();
+    final minBytes = _minExpectedBytes(model);
+    String? magic;
+    var valid = false;
+    try {
+      final raf = await file.open();
+      try {
+        final head = await raf.read(4);
+        magic = _hexMagic(head);
+        valid = size >= minBytes && _matchesMagic(head);
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {}
+    return ModelValidation(
+      exists: true,
+      size: size,
+      valid: valid,
+      magic: magic,
+    );
+  }
 
   /// 模型文件存放目录。
   ///
@@ -81,10 +208,16 @@ class ModelManager {
   Future<void> _initStates() async {
     for (final model in managedModels) {
       await _migrate(model);
-      final path = await pathOf(model);
-      if (await File(path).exists()) {
-        states[_key(model)] = ModelState.downloaded;
+      final v = await validate(model);
+      if (!v.exists) {
+        continue;
       }
+      states[_key(model)] = v.valid
+          ? ModelState.downloaded
+          : const ModelState(
+              state: ModelTaskState.corrupt,
+              error: '模型文件损坏或不完整，请重新下载',
+            );
     }
   }
 
@@ -122,11 +255,16 @@ class ModelManager {
   Future<bool> exists(WhisperModel model) async =>
       await File(await pathOf(model)).exists();
 
-  /// 确保模型就绪（未下载则下载并等待完成）
+  /// 确保模型就绪（未下载则下载并等待完成）。
+  ///
+  /// 若已有文件但校验失败（损坏/不完整），先删除再重新下载。
   Future<void> ensure(WhisperModel model) async {
     final key = _key(model);
     if (states[key]?.state == ModelTaskState.done) {
       return;
+    }
+    if (states[key]?.state == ModelTaskState.corrupt) {
+      await remove(model);
     }
     download(model);
     await everUntilDone(key);
@@ -146,6 +284,7 @@ class ModelManager {
       }
       if (state.state == ModelTaskState.done ||
           state.state == ModelTaskState.paused ||
+          state.state == ModelTaskState.corrupt ||
           state.state == ModelTaskState.idle) {
         return;
       }
@@ -170,30 +309,65 @@ class ModelManager {
     final partFile = File(await _partPath(model));
     final file = File(path);
     if (await file.exists()) {
-      states[key] = ModelState.downloaded;
-      return;
+      if (await _isValidModelFile(file, minBytes: _minExpectedBytes(model))) {
+        states[key] = ModelState.downloaded;
+        return;
+      }
+      // 损坏/不完整的残留文件先删除，避免误判为已下载
+      try {
+        await file.delete();
+      } catch (_) {}
+      states[key] = ModelState(
+        state: ModelTaskState.paused,
+        error: '已删除损坏的模型文件，正在重新下载',
+      );
     }
     var received = await partFile.exists() ? await partFile.length() : 0;
+    if (received > 0 && !await _hasValidMagic(partFile)) {
+      // 断点文件头也不是有效模型，丢弃重下
+      try {
+        await partFile.delete();
+      } catch (_) {}
+      received = 0;
+    }
     var total = 0;
     states[key] = ModelState(
       state: ModelTaskState.downloading,
       received: received,
     );
     try {
-      final response = await Request.dio.get<ResponseBody>(
+      // 模型走 HTTP/1.1 适配器：HF 下载是 302 跳转到 CDN，HTTP/2 适配器对
+      // 流式请求的跳转支持不确定，用 h11 可确保跟随跳转拿到真实文件。
+      final response = await Request.http11Dio.get<ResponseBody>(
         model.modelUri.toString(),
         cancelToken: cancelToken,
         options: Options(
           responseType: ResponseType.stream,
-          headers: {if (received > 0) 'Range': 'bytes=$received-'},
+          followRedirects: true,
+          maxRedirects: 5,
+          headers: {
+            // 模型是二进制，强制不压缩，避免 autoUncompress=false 下写入压缩字节
+            'accept-encoding': 'identity',
+            if (received > 0) 'Range': 'bytes=$received-',
+          },
           validateStatus: (status) => status == 206 || status == 200,
+          receiveTimeout: const Duration(seconds: 60),
         ),
       );
       final headers = response.headers;
-      final contentLength =
+      var contentLength =
           int.tryParse(headers.value(Headers.contentLengthHeader) ?? '') ?? 0;
       final statusCode = response.statusCode ?? -1;
-      if (statusCode == 200 && received > 0) {
+      if (statusCode == 206) {
+        // 优先用 Content-Range 得到真实总大小，比 content-length 更可靠
+        final contentRange = headers.value('content-range') ?? '';
+        if (contentRange.contains('/')) {
+          final full = int.tryParse(contentRange.split('/').last);
+          if (full != null && full > 0) {
+            contentLength = full - received;
+          }
+        }
+      } else if (received > 0) {
         // 服务器不支持 Range，重新下载
         received = 0;
       }
@@ -227,7 +401,13 @@ class ModelManager {
         await sink.close();
       }
       if (total > 0 && received < total) {
-        throw '下载不完整';
+        throw '下载不完整（$received/$total）';
+      }
+      if (!await _isValidModelFile(
+        partFile,
+        minBytes: _minExpectedBytes(model),
+      )) {
+        throw '模型文件校验失败（请检查网络后重试）';
       }
       await partFile.rename(path);
       states[key] = const ModelState(
@@ -303,6 +483,12 @@ class ModelManager {
     states.remove(key);
   }
 
+  /// 删除并重新下载（用于文件损坏时）。
+  Future<void> redownload(WhisperModel model) async {
+    await remove(model);
+    download(model);
+  }
+
   /// 导出模型：返回模型文件路径（Android 上位于 Download/piliplus_models，
   /// 用户可直接访问/分享）；未下载返回 null。
   Future<String?> exportModelPath(WhisperModel model) async {
@@ -322,6 +508,16 @@ class ModelManager {
       await _migrate(model);
       final target = await pathOf(model);
       await sourceFile.copy(target);
+      if (!await _isValidModelFile(
+        File(target),
+        minBytes: _minExpectedBytes(model),
+      )) {
+        // 导入的并不是有效模型文件，清理并报告失败
+        try {
+          await File(target).delete();
+        } catch (_) {}
+        return null;
+      }
       states[_key(model)] = ModelState.downloaded;
       return model;
     }

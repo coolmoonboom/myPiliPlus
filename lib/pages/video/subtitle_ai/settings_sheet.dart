@@ -172,8 +172,13 @@ class _ModelSelectorState extends State<ModelSelector> {
     if (state == null ||
         (state.state != ModelTaskState.done &&
             state.state != ModelTaskState.downloading)) {
-      widget.modelManager.download(model);
-      SmartDialog.showToast('正在下载 ${model.modelName} 识别模型…');
+      if (state?.state == ModelTaskState.corrupt) {
+        widget.modelManager.redownload(model);
+        SmartDialog.showToast('模型文件损坏，正在重新下载 ${model.modelName}…');
+      } else {
+        widget.modelManager.download(model);
+        SmartDialog.showToast('正在下载 ${model.modelName} 识别模型…');
+      }
     }
   }
 
@@ -305,15 +310,22 @@ class _ModelSelectorState extends State<ModelSelector> {
                   TextButton(
                     onPressed: state.state == ModelTaskState.downloading
                         ? () => widget.modelManager.pause(model)
-                        : () => widget.modelManager.download(model),
+                        : (state.state == ModelTaskState.corrupt
+                              ? () => widget.modelManager.redownload(model)
+                              : () => widget.modelManager.download(model)),
                     child: Text(
                       state.state == ModelTaskState.downloading
                           ? '暂停'
-                          : (state.state == ModelTaskState.paused ? '继续' : '下载'),
+                          : (state.state == ModelTaskState.paused
+                                ? '继续'
+                                : (state.state == ModelTaskState.corrupt
+                                      ? '重新下载'
+                                      : '下载')),
                     ),
                   ),
                   if (state.state == ModelTaskState.paused ||
-                      state.state == ModelTaskState.done)
+                      state.state == ModelTaskState.done ||
+                      state.state == ModelTaskState.corrupt)
                     TextButton(
                       onPressed: () => widget.modelManager.remove(model),
                       child: const Text('卸载'),

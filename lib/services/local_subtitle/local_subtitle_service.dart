@@ -49,6 +49,9 @@ class LocalSubtitleSegment {
 abstract final class LocalSubtitleService {
   static const WhisperModel defaultModel = WhisperModel.base;
 
+  /// 最近一次 [transcribeWithModel] 的错误信息（用于识别层判断是否为模型问题）
+  static String? lastTranscribeError;
+
   static const List<({WhisperModel model, String label})> modelOptions = [
     (model: WhisperModel.tiny, label: 'tiny (最快, 约75MB)'),
     (model: WhisperModel.base, label: 'base (推荐, 约140MB)'),
@@ -132,11 +135,14 @@ abstract final class LocalSubtitleService {
     void Function(int percent)? onProgress,
   }) async {
     final modelPath = await ModelManager.instance.pathOf(model);
+    final validation = await ModelManager.instance.validate(model);
     SubtitleDebugLog.instance.log(
-      'transcribe modelPath=$modelPath 存在='
-      '${await File(modelPath).exists()}',
+      'transcribe 模型 path=$modelPath 存在=${validation.exists} '
+      '大小=${validation.size}B 魔数=${validation.magic ?? '无'} '
+      '有效=${validation.valid}',
     );
     try {
+      lastTranscribeError = null;
       return await Whisper(model: model).transcribe(
         transcribeRequest: TranscribeRequest(
           audio: audioPath,
@@ -155,8 +161,15 @@ abstract final class LocalSubtitleService {
         onProgress: onProgress,
       );
     } catch (e) {
+      lastTranscribeError = '$e';
       debugPrint('whisper transcribe error: $e');
       SubtitleDebugLog.instance.log('whisper transcribe 失败：$e');
+      if (!validation.valid) {
+        SubtitleDebugLog.instance.log(
+          '提示：模型文件无效（大小=${validation.size}B 魔数='
+          '${validation.magic ?? '无'}），请在设置中删除并重新下载模型',
+        );
+      }
       return null;
     }
   }

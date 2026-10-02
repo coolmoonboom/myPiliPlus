@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
+import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
 import 'package:dio/dio.dart';
 import 'package:get/get.dart';
@@ -54,6 +55,9 @@ class IncrementalRecognizer extends GetxController {
   bool _rangeSupported = false;
   double _lastEnd = 0;
 
+  /// 连续转写失败次数，达到阈值直接报错退出，避免无限「识别中」
+  int _consecutiveFailures = 0;
+
   /// 跟随播放模式下已识别到的最远秒数（增量追加，避免重复转写）
   double _recognizedEnd = 0;
 
@@ -91,6 +95,16 @@ class IncrementalRecognizer extends GetxController {
     _lastEnd = _recognizedEnd;
     _cancelToken = CancelToken();
     try {
+      final m = model;
+      if (m != null) {
+        final v = await ModelManager.instance.validate(m);
+        if (v.exists && !v.valid) {
+          SubtitleDebugLog.instance.log(
+            '启动前检测：模型无效 size=${v.size}B 魔数=${v.magic ?? '无'}',
+          );
+          throw Exception('模型文件损坏，请在设置中删除并重新下载识别模型');
+        }
+      }
       await _prepare();
       await _run();
     } catch (e) {
@@ -457,7 +471,25 @@ class IncrementalRecognizer extends GetxController {
       },
     );
     final cost = DateTime.now().difference(startedAt).inMilliseconds;
-    final raw = result?.segments ?? [];
+    if (result == null) {
+      _consecutiveFailures++;
+      final err = LocalSubtitleService.lastTranscribeError ?? '';
+      final isModelIssue = err.contains('failed to load model');
+      SubtitleDebugLog.instance.log(
+        '转写失败 s0=$s0 连续=$_consecutiveFailures 模型问题=$isModelIssue',
+      );
+      if (_consecutiveFailures >= 3) {
+        throw Exception(
+          isModelIssue
+              ? '模型加载失败，请在设置中删除并重新下载识别模型'
+              : '连续转写失败，请查看调试日志',
+        );
+      }
+      status.value = isModelIssue ? '模型加载失败，见调试日志' : '转写失败，见调试日志';
+      return const [];
+    }
+    _consecutiveFailures = 0;
+    final raw = result.segments ?? [];
     SubtitleDebugLog.instance.log(
       '转写完成 s0=$s0 耗时${cost}ms 原始分段=${raw.length}',
     );
