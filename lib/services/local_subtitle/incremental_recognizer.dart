@@ -814,6 +814,7 @@ class IncrementalRecognizer extends GetxController {
   /// 停止识别
   void stop() {
     _cancelled = true;
+    _pendingRestart = false;
     SubtitleDebugLog.instance.log('手动停止识别，已识别 ${segments.length} 条');
     _cancelToken?.cancel('stopped');
   }
