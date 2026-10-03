@@ -192,7 +192,7 @@ class IncrementalRecognizer extends GetxController {
     if (!await File(file).exists()) {
       throw '音频文件不存在：$file';
     }
-    final raf = await RandomAccessFile.open(file, FileMode.read);
+    final raf = File(file).openSync();
     _raf = raf;
     _totalBytes = await raf.length();
     _rangeSupported = true;
