@@ -142,53 +142,55 @@ class LiveSubtitleSession extends GetxController {
     SubtitleDebugLog.instance.log(
       '视频时长 $total 秒，播放位置 ${plPlayerController.position.value} 秒',
     );
-    // 串行化重启：等旧的识别循环（含可能的原生转写挂起）彻底退出，
-    // 避免新旧会话同时操作原生模型导致新转写永久卡死（进度卡 0%）
-    final old = _recognizer;
-    if (old != null) {
-      old.stop();
-      stage.value = '整理上一轮识别';
-      var finishedInTime = true;
-      try {
-        await old.done.timeout(const Duration(seconds: 270));
-      } on TimeoutException {
-        finishedInTime = false;
-      }
-      SubtitleDebugLog.instance.log(
-        finishedInTime ? '旧识别循环已退出，启动新会话' : '旧识别循环超时未退出，强制启动新会话',
-      );
-    }
-    segments.clear();
-    final recognizer = IncrementalRecognizer(
+    // 复用同一识别器实例：块完成进度与已识别结果全部保留，
+    // stop→start 秒重启（模型也不释放），转写中被重新点开始则自动排队重启。
+    final firstTime = _recognizer == null;
+    final recognizer = _recognizer ??= IncrementalRecognizer(
       audioUrl: audioFile == null ? url : '',
       audioFile: audioFile,
       totalSeconds: total,
       segments: segments,
     );
-    _recognizer = recognizer
+    if (firstTime) {
+      recognizer.releaseModelOnExit = false;
+      recognizer.status.listen((s) {
+        if (!_closed) {
+          stage.value = s;
+        }
+      });
+      recognizer.running.listen((r) {
+        if (_closed) {
+          return;
+        }
+        if (r) {
+          running.value = true;
+          return;
+        }
+        // 识别器自行结束（到末尾/失败）时同步复位会话运行态
+        if (running.value) {
+          running.value = false;
+          if (segments.isNotEmpty) {
+            unawaited(_inject(force: true));
+          }
+          if (stage.value.isEmpty) {
+            stage.value = '识别结束';
+          }
+        }
+      });
+    }
+    _injectTimer?.cancel();
+    _injectTimer = Timer.periodic(const Duration(seconds: 5), (_) => _inject());
+    recognizer
       ..model = _model
       ..bilingual = _bilingual
       ..followPlayback = _followPlayback
-      ..positionProvider = () => plPlayerController.position.value;
-    _injectTimer = Timer.periodic(const Duration(seconds: 5), (_) => _inject());
+      ..positionProvider = () =>
+          plPlayerController.position.value..releaseModelOnExit = false;
+    SubtitleDebugLog.instance.log(
+      '复用识别器：已保留 ${segments.length} 条结果，'
+      '剩余块将继续按优先队列识别',
+    );
     stage.value = '准备就绪';
-    recognizer.status.listen((s) {
-      if (!_closed) {
-        stage.value = s;
-      }
-    });
-    recognizer.running.listen((r) {
-      // 识别器自行结束（到末尾/失败）时同步复位会话运行态，避免 UI 卡在识别中
-      if (!r && running.value) {
-        running.value = false;
-        if (segments.isNotEmpty) {
-          unawaited(_inject(force: true));
-        }
-        if (!_closed && stage.value.isEmpty) {
-          stage.value = '识别结束';
-        }
-      }
-    });
     await recognizer.start(fromSeconds: plPlayerController.position.value);
   }
 
@@ -260,12 +262,17 @@ class LiveSubtitleSession extends GetxController {
     await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
   }
 
-  /// 释放会话：停止识别、取消 position 订阅。由外部生命周期回调调用。
+  /// 释放会话：停止识别、释放模型、取消 position 订阅。由外部生命周期回调调用。
   void shutdown() {
     _closed = true;
     _injectTimer?.cancel();
     _injectTimer = null;
-    _recognizer?.stop();
+    final recognizer = _recognizer;
+    if (recognizer != null) {
+      // 页面退出：本轮循环结束后释放原生模型（若用户已开新会话则由守卫跳过）
+      recognizer.releaseModelOnExit = true;
+      recognizer.stop();
+    }
     _recognizer = null;
     _sub?.cancel();
     _sub = null;

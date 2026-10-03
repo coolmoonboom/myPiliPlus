@@ -75,7 +75,9 @@ class IncrementalRecognizer extends GetxController {
   bool _rangeSupported = false;
 
   /// 每个识别块的时长（秒）。整片按此长度切块，块优先级队列调度。
-  static const int blockSeconds = 60;
+  /// 30 秒：手机上 base 模型一段约 40~75 秒可出结果，兼顾「拖到哪里都快出字幕」
+  /// 与转写固定开销。
+  static const int blockSeconds = 30;
 
   /// 单块最多尝试次数，超过则跳过该块（避免无限重试卡住队列）
   static const int _maxTriesPerBlock = 3;
@@ -109,12 +111,26 @@ class IncrementalRecognizer extends GetxController {
   static IncrementalRecognizer? _active;
   final Completer<void> _doneCompleter = Completer<void>();
 
-  /// 识别流程完全结束（含资源释放）后完成，供会话串行化重启。
+  /// 转写进行中收到「重新开始」：旧循环退出后自动再启一轮，
+  /// 原生转写无法中断，用户无需等待它跑完再点开始。
+  bool _pendingRestart = false;
+
+  /// 停止后是否释放原生模型。会话内 stop→start 复用模型置 false（秒重启）；
+  /// 页面关闭时由会话置 true 走正常释放。
+  bool releaseModelOnExit = true;
+
+  /// 识别流程完全结束（含资源释放）后完成，供会话收尾。
   Future<void> get done => _doneCompleter.future;
 
   /// 开始识别；[fromSeconds] 起始位置（默认当前播放位置）
   Future<void> start({int? fromSeconds}) async {
     if (running.value) {
+      // 上一轮还在跑（原生转写中无法中断）：排队自动重启，别让用户干等
+      _pendingRestart = true;
+      _cancelled = true;
+      _cancelToken?.cancel('restart requested');
+      status.value = '正在切换到新的识别队列…';
+      SubtitleDebugLog.instance.log('重复启动请求：标记 pendingRestart');
       return;
     }
     _active = this;
@@ -154,23 +170,34 @@ class IncrementalRecognizer extends GetxController {
       await _raf?.close();
       _raf = null;
       running.value = false;
-      if (!_cancelled && segments.isEmpty) {
+      if (_pendingRestart) {
+        SubtitleDebugLog.instance.log('旧循环已退出，自动开启新一轮识别队列');
+      } else if (!_cancelled && segments.isEmpty) {
         status.value = '未识别到语音内容';
         SubtitleDebugLog.instance.log('未识别到语音内容');
       } else if (!_cancelled) {
         status.value = '识别完成';
         SubtitleDebugLog.instance.log('识别完成，共 ${segments.length} 条');
+      } else {
+        status.value = '识别已停止（结果已保留）';
       }
-      // 仅当自己仍是当前活跃识别器时才释放原生模型，避免竞态释放新会话模型
-      if (identical(_active, this)) {
+      // 停止后是否释放原生模型：会话内 stop→start 保留模型实现秒重启；
+      // 仅当外部（页面关闭）要求退出时释放，且只有自己仍是活跃识别器才释放。
+      if (releaseModelOnExit && !_pendingRestart && identical(_active, this)) {
         _active = null;
         await WhisperController().releaseModel();
-      } else {
-        SubtitleDebugLog.instance.log('跳过 releaseModel：已有新的识别会话');
       }
       _cancelToken = null;
       if (!_doneCompleter.isCompleted) {
         _doneCompleter.complete();
+      }
+      if (_pendingRestart) {
+        _pendingRestart = false;
+        scheduleMicrotask(() {
+          if (!running.value) {
+            start();
+          }
+        });
       }
     }
   }

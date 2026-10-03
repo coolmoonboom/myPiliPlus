@@ -82,7 +82,9 @@ abstract final class LocalSubtitleService {
   ///
   /// 返回 (文件路径, 是否为临时下载文件)。网络视频需要先把音频流下载到临时目录，
   /// Android/iOS/macOS 上 whisper_ggml 内置 FFmpeg 会自动转成模型需要的格式。
-  static Future<LoadingState<(String, bool)>> resolveAudio(DataSource ds) async {
+  static Future<LoadingState<(String, bool)>> resolveAudio(
+    DataSource ds,
+  ) async {
     final String? source;
     if (ds is FileSource) {
       source = ds.audioSource ?? ds.videoSource;
@@ -132,6 +134,7 @@ abstract final class LocalSubtitleService {
     bool withSegments = false,
     bool splitOnWord = false,
     bool keepModelLoaded = false,
+    int threads = 3,
     void Function(int percent)? onProgress,
   }) async {
     final modelPath = await ModelManager.instance.pathOf(model);
@@ -156,6 +159,8 @@ abstract final class LocalSubtitleService {
           noContext: noContext,
           suppressNonSpeechTokens: suppressNonSpeechTokens,
           keepModelLoaded: keepModelLoaded,
+          // 默认 6 线程会吃满手机 CPU 触发系统 ANR 弹窗，让出核给 UI 与解码
+          threads: threads,
         ),
         modelPath: modelPath,
         onProgress: onProgress,
@@ -262,18 +267,19 @@ abstract final class LocalSubtitleService {
     for (var start = 0; start < segments.length; start += concurrency) {
       final end = (start + concurrency).clamp(0, segments.length);
       final batch = segments.sublist(start, end);
-      final translations = await Future.wait<String>(
-        batch.map((seg) async {
-          try {
-            return await translator.translate(seg.text);
-          } catch (_) {
-            return '';
-          }
-        }),
-      ).timeout(
-        batchTimeout,
-        onTimeout: () => List<String>.filled(batch.length, ''),
-      );
+      final translations =
+          await Future.wait<String>(
+            batch.map((seg) async {
+              try {
+                return await translator.translate(seg.text);
+              } catch (_) {
+                return '';
+              }
+            }),
+          ).timeout(
+            batchTimeout,
+            onTimeout: () => List<String>.filled(batch.length, ''),
+          );
       for (var i = 0; i < translations.length; i++) {
         if (translations[i].isNotEmpty) {
           results[start + i] = translations[i];
