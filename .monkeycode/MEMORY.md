@@ -95,7 +95,7 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - gh workflow run 省略 tag 时，build.yml 的 Release 步骤被跳过，只跑 upload-artifact；不会自动生成 Release 资产。
   - 取产物：`gh api repos/coolmoonboom/myPiliPlus/actions/artifacts/<artifact_id>/zip`（返回的就是 APK 字节；`gh run download` 会把它解成目录）。artifact_id 用 `gh api .../runs/<run_id>/artifacts --jq '.artifacts[]|select(.name|contains("arm64"))|.id'` 取。
-  - 上传：`gh release upload 2.3.0 <apk> --repo coolmoonboom/myPiliPlus`（同名已存在加 --clobber）。若改用 curl POST `uploads.github.com/.../assets?name=...`，文件名里的 `+` 必须写成 `%2B`，否则被 query 解析成空格、资产名被 mangled 且下载 404；上传后必须 curl 验证下载 URL 可访问再交付。
+  - 上传：`gh release upload 2.3.0 <apk> --repo coolmoonboom/myPiliPlus`（同名已存在加 --clobber）。若改用 curl POST `uploads.github.com/.../assets?name=...`，`+` 必须写成 URI query 里的 `%2B` + `--data-binary @文件`；multipart `-F name=...`（含表单字段里带 `%`/`+`）会被拒为 `Invalid name for request`，只有 query 方式可行。上传后必须 curl 验证下载 URL 可访问再交付。
   - gh 认证 token 易过期（HTTP 401 Bad credentials）；用 `printf 'protocol=https\nhost=github.com\n\n' | git credential fill` 取 password 后 `gh auth login --with-token` 重新登录即可。
 
 [新 UI 必须用 material_ui 主题体系；视频页弹层走 PageUtils.showVideoBottomSheet]
@@ -133,3 +133,9 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 本项目 UI 层只允许 `package:material_ui/material_ui.dart`（它 export flutter/widgets.dart 并重定义 Theme/Icons/Colors/FilledButton 等）；任何文件再显式 import 'package:flutter/material.dart' 会引发大量 "imported from both" 编译错误。
   - 缺符号（如 ScrollDirection/UserScrollNotification）时优先用 material_ui 已导出的 widgets 符号 + Dart 3 枚举简写（`n.direction != .idle`、`position.userScrollDirection == .forward`），参考 lib/pages/live_room/controller.dart；确有文件同时导两者时须逐个 hide 冲突符号，避免。
+[dart:io 编译陷阱：无 RandomAccessFile.open]
+- Date: 2026-10-03
+- Context: CI 编译失败（Member not found: 'RandomAccessFile.open'）
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 本项目 Flutter SDK 的 dart:io 没有 `RandomAccessFile.open(...)` 静态方法，随机读文件要用 `File(path).openSync()`（返回 RandomAccessFile，默认 read 模式）；本地无 flutter 环境时本地 dart 分析发现不了这类 SDK 差异，最终以 CI 为准。
