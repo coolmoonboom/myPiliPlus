@@ -25,6 +25,9 @@ class LiveSubtitleSession extends GetxController {
     required ModelManager modelManager,
   }) : _modelManager = modelManager {
     _sub = plPlayerController.position.stream.listen(_onPosition);
+    // 会话级一次性订阅：识别出新分段就刷新注入轨。每轮重启识别器都
+    // 复用同一个 segments 实例，避免逐轮叠加监听。
+    _segSub = segments.listen((_) => _inject());
   }
 
   final PlPlayerController plPlayerController;
@@ -37,17 +40,20 @@ class LiveSubtitleSession extends GetxController {
 
   IncrementalRecognizer? _recognizer;
   StreamSubscription<int>? _sub;
+  StreamSubscription<void>? _segSub;
   int _lastPosition = -1;
+
+  /// 注入字幕轨的 1 起始轨号；-1 表示正在添加，0 表示尚未注入
   int _injectTrack = 0;
   Timer? _injectTimer;
   bool _closed = false;
 
-  static final RxList<LocalSubtitleSegment> _emptySegments =
-      <LocalSubtitleSegment>[].obs;
-
-  /// 当前已识别出的分段（增量刷新，供字幕面板监听展示）
-  RxList<LocalSubtitleSegment> get segments =>
-      _recognizer?.segments ?? _emptySegments;
+  /// 当前已识别出的分段（增量刷新，供字幕面板监听展示）。
+  ///
+  /// 必须是稳定实例：面板 Obx 首次 build 时识别器可能还没创建，
+  /// 若 getter 在识别器缺位时返回别的列表，订阅就会落在错误对象上，
+  /// 导致识别出内容后面板也不刷新（字幕 tab 一直空白）。
+  final RxList<LocalSubtitleSegment> segments = <LocalSubtitleSegment>[].obs;
 
   Stream<int> get positionStream => plPlayerController.position.stream;
 
@@ -147,9 +153,11 @@ class LiveSubtitleSession extends GetxController {
         finishedInTime ? '旧识别循环已退出，启动新会话' : '旧识别循环超时未退出，强制启动新会话',
       );
     }
+    segments.clear();
     final recognizer = IncrementalRecognizer(
       audioUrl: url,
       totalSeconds: total,
+      segments: segments,
     );
     _recognizer = recognizer
       ..model = _model
@@ -167,35 +175,55 @@ class LiveSubtitleSession extends GetxController {
       // 识别器自行结束（到末尾/失败）时同步复位会话运行态，避免 UI 卡在识别中
       if (!r && running.value) {
         running.value = false;
+        if (segments.isNotEmpty) {
+          unawaited(_inject(force: true));
+        }
         if (!_closed && stage.value.isEmpty) {
           stage.value = '识别结束';
         }
       }
     });
-    recognizer.segments.listen((_) => _inject());
     await recognizer.start(fromSeconds: plPlayerController.position.value);
   }
 
-  void _inject() {
+  DateTime _lastInjectAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _inject({bool force = false}) async {
     final recognizer = _recognizer;
-    if (recognizer == null || _closed) {
+    if (recognizer == null || _closed || _injectTrack == -1) {
       return;
     }
-    final segs = recognizer.segments.toList();
+    // 节流：识别每 add 一句都会触发，重建播放器字幕轨有闪烁，
+    // 至少间隔 4 秒再更新（定时器会兜底补上最终内容）
+    final now = DateTime.now();
+    final hasTrack = _injectTrack > 0;
+    if (!force &&
+        hasTrack &&
+        now.difference(_lastInjectAt) < const Duration(seconds: 4)) {
+      return;
+    }
+    _lastInjectAt = now;
+    final segs = segments.toList();
     if (segs.isEmpty) {
       return;
     }
     final vtt = LocalSubtitleService.buildVtt(segs);
-    final idx = _injectTrack;
-    if (idx == 0) {
-      _injectTrack = videoDetailController.subtitles.length;
-      videoDetailController.addSubtitleTrack(
+    if (_injectTrack == 0) {
+      // -1 占位，防止并发重入重复加轨
+      _injectTrack = -1;
+      final track = await videoDetailController.addSubtitleTrack(
         LocalSubtitleService.buildSubtitleEntry(bilingual: _bilingual),
         vtt,
       );
-      subtitleTrackIndex.value = _injectTrack;
+      if (_closed) {
+        return;
+      }
+      // 必须记录播放器返回的 1 起始轨号；此前记「添加前下标」差一，
+      // 后续更新全部写错轨道，注入的字幕只会显示开头几句
+      _injectTrack = track;
+      subtitleTrackIndex.value = track;
     } else {
-      videoDetailController.updateSubtitleTrack(idx, vtt);
+      videoDetailController.updateSubtitleTrack(_injectTrack, vtt);
     }
   }
 
@@ -205,17 +233,15 @@ class LiveSubtitleSession extends GetxController {
     _injectTimer = null;
     _recognizer?.stop();
     SubtitleDebugLog.instance.log('会话停止（保留已识别结果）');
+    if (segments.isNotEmpty) {
+      unawaited(_inject(force: true));
+    }
     running.value = false;
   }
 
   /// 导出识别结果为 SRT
   Future<void> exportSrt() async {
-    final recognizer = _recognizer;
-    if (recognizer == null) {
-      SmartDialog.showToast('尚无识别结果');
-      return;
-    }
-    final segs = recognizer.segments.toList();
+    final segs = segments.toList();
     if (segs.isEmpty) {
       SmartDialog.showToast('尚无识别结果');
       return;
@@ -237,6 +263,8 @@ class LiveSubtitleSession extends GetxController {
     _recognizer = null;
     _sub?.cancel();
     _sub = null;
+    _segSub?.cancel();
+    _segSub = null;
     running.value = false;
   }
 

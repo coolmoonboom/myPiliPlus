@@ -1,6 +1,7 @@
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
@@ -114,11 +115,68 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
   }
 }
 
-class _SubtitleList extends StatelessWidget {
+class _SubtitleList extends StatefulWidget {
   const _SubtitleList({required this.session, required this.playerController});
 
   final LiveSubtitleSession session;
   final PlPlayerController playerController;
+
+  @override
+  State<_SubtitleList> createState() => _SubtitleListState();
+}
+
+class _SubtitleListState extends State<_SubtitleList> {
+  LiveSubtitleSession get session => widget.session;
+  PlPlayerController get playerController => widget.playerController;
+
+  final ScrollController _scroll = ScrollController();
+  final Map<int, GlobalKey> _rowKeys = {};
+  bool _follow = true;
+  int _lastActive = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScrollChanged);
+  }
+
+  void _onScrollChanged() {
+    if (!_scroll.hasClients) {
+      return;
+    }
+    final pos = _scroll.position;
+    // 用户滚回底部时恢复自动跟随
+    if (pos.pixels >= pos.maxScrollExtent - 120) {
+      _follow = true;
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_onScrollChanged);
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _maybeFollow(int active, int count) {
+    if (active == _lastActive || !_follow || active < 0) {
+      return;
+    }
+    _lastActive = active;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_follow) {
+        return;
+      }
+      final ctx = _rowKeys[active]?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.4,
+          duration: const Duration(milliseconds: 250),
+        );
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -149,45 +207,67 @@ class _SubtitleList extends StatelessWidget {
           break;
         }
       }
-      return ListView.builder(
-        itemCount: segments.length,
-        itemBuilder: (context, index) {
-          final seg = segments[index];
-          final isActive = index == active;
-          final isPassed = currentPos > seg.to + 1;
-          return AnimatedOpacity(
-            duration: const Duration(milliseconds: 200),
-            opacity: isPassed && !isActive ? 0.5 : 1,
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: isActive
-                    ? theme.colorScheme.primaryContainer
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    seg.text,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: isActive ? FontWeight.w600 : null,
-                    ),
-                  ),
-                  if (seg.translated != null && seg.translated!.isNotEmpty)
+      if (segments.length < _rowKeys.length) {
+        _rowKeys.removeWhere((k, _) => k >= segments.length);
+      }
+      _maybeFollow(active, segments.length);
+      return NotificationListener<UserScrollNotification>(
+        onNotification: (n) {
+          // 用户手动滚动时暂停自动跟随，滚回底部后恢复
+          if (n.direction != ScrollDirection.idle) {
+            _follow = false;
+          }
+          return false;
+        },
+        child: ListView.builder(
+          controller: _scroll,
+          itemCount: segments.length,
+          itemBuilder: (context, index) {
+            final seg = segments[index];
+            final isActive = index == active;
+            final isPassed = currentPos > seg.to + 1;
+            return AnimatedOpacity(
+              key: _rowKeys.putIfAbsent(index, GlobalKey.new),
+              duration: const Duration(milliseconds: 200),
+              opacity: isPassed && !isActive ? 0.5 : 1,
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: isActive
+                      ? theme.colorScheme.primaryContainer
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      seg.translated!,
+                      seg.text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.primary,
+                        fontWeight: isActive ? FontWeight.w600 : null,
                       ),
                     ),
-                ],
+                    if (seg.translated != null && seg.translated!.isNotEmpty)
+                      Text(
+                        seg.translated!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       );
     });
   }

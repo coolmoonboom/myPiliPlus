@@ -457,9 +457,8 @@ class VideoDetailController extends GetxController
           for (final item in mediaList) {
             if (item.cid != null) {
               try {
-                Get.find<UgcIntroController>(
-                  tag: heroTag,
-                ).onChangeEpisode(item);
+                Get.find<UgcIntroController>(tag: heroTag)
+                    .onChangeEpisode(item);
               } catch (_) {}
               break;
             }
@@ -576,10 +575,7 @@ class VideoDetailController extends GetxController
       alignment: Alignment.centerLeft,
       child: SlideTransition(
         position: animation.drive(
-          Tween<Offset>(
-            begin: const Offset(-1.0, 0.0),
-            end: Offset.zero,
-          ),
+          Tween<Offset>(begin: const Offset(-1.0, 0.0), end: Offset.zero),
         ),
         child: Padding(
           padding: const EdgeInsets.only(top: 5),
@@ -754,10 +750,7 @@ class VideoDetailController extends GetxController
               isMp4: entry.mediaType == 1,
               hasDashAudio: entry.hasDashAudio,
             )
-          : NetworkSource(
-              videoSource: videoUrl!,
-              audioSource: audioUrl,
-            ),
+          : NetworkSource(videoSource: videoUrl!, audioSource: audioUrl),
       seekTo: seek,
       duration: data.timeLength == null
           ? null
@@ -1106,18 +1099,23 @@ class VideoDetailController extends GetxController
     await setSub(subtitle);
   }
 
-  /// 追加一条本地生成的字幕轨道（如本地法语识别字幕）并切换显示
-  Future<void> addSubtitleTrack(Subtitle sub, String vtt) async {
+  /// 追加一条本地生成的字幕轨道（如本地法语识别字幕）并切换显示。
+  /// 返回 1 起始的播放器轨号（与 [setSubtitle]/[updateSubtitleTrack] 一致）。
+  Future<int> addSubtitleTrack(Subtitle sub, String vtt) async {
     final idx = subtitles.length;
     subtitles.add(sub);
     vttSubtitles[idx] = (isData: true, id: vtt);
     await setSubtitle(idx + 1);
+    return idx + 1;
   }
 
   /// 更新一条本地生成字幕轨道的 VTT 内容（增量识别时反复更新）
   Future<void> updateSubtitleTrack(int index, String vtt) async {
     final idx = index - 1;
     if (idx < 0 || idx >= subtitles.length) {
+      return;
+    }
+    if (vttSubtitles[idx]?.id == vtt) {
       return;
     }
     vttSubtitles[idx] = (isData: true, id: vtt);
@@ -1448,9 +1446,10 @@ class VideoDetailController extends GetxController
   void showNoteList(BuildContext context) {
     String? title;
     try {
-      title = Get.find<UgcIntroController>(
-        tag: heroTag,
-      ).videoDetail.value.title;
+      title = Get.find<UgcIntroController>(tag: heroTag)
+          .videoDetail
+          .value
+          .title;
     } catch (_) {}
     if (plPlayerController.isFullScreen.value || showVideoSheet) {
       final child = NoteListPage(
@@ -1685,25 +1684,21 @@ class VideoDetailController extends GetxController
       String? title;
       try {
         if (isUgc) {
-          title = Get.find<UgcIntroController>(
-            tag: heroTag,
-          ).videoDetail.value.title;
+          title = Get.find<UgcIntroController>(tag: heroTag)
+              .videoDetail
+              .value
+              .title;
         } else {
-          title = Get.find<PgcIntroController>(
-            tag: heroTag,
-          ).videoDetail.value.title;
+          title = Get.find<PgcIntroController>(tag: heroTag)
+              .videoDetail
+              .value
+              .title;
         }
       } catch (_) {}
       if (kDebugMode) {
         debugPrint(title);
       }
-      Get.toNamed(
-        '/dlna',
-        parameters: {
-          'url': url,
-          'title': ?title,
-        },
-      );
+      Get.toNamed('/dlna', parameters: {'url': url, 'title': ?title});
     } else {
       res.toast();
     }

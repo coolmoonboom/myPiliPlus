@@ -21,7 +21,11 @@ import 'package:whisper_ggml/whisper_ggml.dart';
 ///   - 支持播放进度跳变（拖动）后从新位置继续识别
 ///   - 支持中途停止
 class IncrementalRecognizer extends GetxController {
-  IncrementalRecognizer({required this.audioUrl, required this.totalSeconds});
+  IncrementalRecognizer({
+    required this.audioUrl,
+    required this.totalSeconds,
+    RxList<LocalSubtitleSegment>? segments,
+  }) : segments = segments ?? <LocalSubtitleSegment>[].obs;
 
   /// 音频流地址（无音频时退化为视频流地址）
   final String audioUrl;
@@ -42,7 +46,8 @@ class IncrementalRecognizer extends GetxController {
   /// 前向少取一些，每段音频更短，识别更快跟上播放位置（避免长时间看不到字幕）。
   static const int followLookaheadSeconds = 8;
 
-  final RxList<LocalSubtitleSegment> segments = <LocalSubtitleSegment>[].obs;
+  /// 识别结果列表；会话会注入共享实例，保证 UI 订阅的对象稳定
+  final RxList<LocalSubtitleSegment> segments;
   final RxString status = ''.obs;
   final RxBool running = false.obs;
 
