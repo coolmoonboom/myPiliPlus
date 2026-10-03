@@ -88,26 +88,31 @@ class LiveSubtitleSession extends GetxController {
       return;
     }
     final ds = plPlayerController.dataSource;
-    final String? audioUrl;
+    String url = '';
+    String? audioFile;
     if (ds is NetworkSource) {
-      audioUrl = ds.audioSource ?? ds.videoSource;
+      url = ds.audioSource ?? ds.videoSource ?? '';
+      if (url.isEmpty) {
+        SmartDialog.showToast('无法获取音频地址');
+        return;
+      }
     } else if (ds is FileSource) {
-      SmartDialog.showToast('本地文件识别请使用旧版全量识别');
-      return;
+      // 离线缓存：直接读缓存目录里的 audio.m4s，无需下载
+      final p = ds.audioSource;
+      if (p == null || !File(p).existsSync()) {
+        SmartDialog.showToast('未找到本地音频缓存文件（可能为合并流视频）');
+        return;
+      }
+      audioFile = p;
     } else {
-      SmartDialog.showToast('无法获取音频地址');
-      return;
-    }
-    final url = audioUrl ?? '';
-    if (url.isEmpty) {
       SmartDialog.showToast('无法获取音频地址');
       return;
     }
     running.value = true;
     stage.value = '检查模型';
     SubtitleDebugLog.instance.log(
-      '会话开始 url=$url 模型=${_model.modelName} 双语=$_bilingual '
-      '跟随=$_followPlayback',
+      '会话开始 ${audioFile != null ? 'file=$audioFile' : 'url=$url'} '
+      '模型=${_model.modelName} 双语=$_bilingual 跟随=$_followPlayback',
     );
     try {
       await _modelManager.ensure(_model);
@@ -155,7 +160,8 @@ class LiveSubtitleSession extends GetxController {
     }
     segments.clear();
     final recognizer = IncrementalRecognizer(
-      audioUrl: url,
+      audioUrl: audioFile == null ? url : '',
+      audioFile: audioFile,
       totalSeconds: total,
       segments: segments,
     );

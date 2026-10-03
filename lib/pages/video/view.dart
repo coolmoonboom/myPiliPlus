@@ -132,8 +132,8 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
             ((videoDetail.pages?.length ?? 0) > 1));
   }
 
-  /// 在线视频页显示「字幕」标签（AI 增量识别字幕）。
-  bool get _shouldShowSubtitleTab => !videoDetailController.isFileSource;
+  /// 视频页显示「字幕」标签（AI 增量识别字幕，在线与离线缓存视频均支持）。
+  bool get _shouldShowSubtitleTab => true;
 
   final videoReplyPanelKey = GlobalKey();
   final videoRelatedKey = GlobalKey();

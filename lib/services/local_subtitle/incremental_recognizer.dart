@@ -22,13 +22,21 @@ import 'package:whisper_ggml/whisper_ggml.dart';
 ///   - 支持中途停止
 class IncrementalRecognizer extends GetxController {
   IncrementalRecognizer({
-    required this.audioUrl,
     required this.totalSeconds,
+    this.audioUrl = '',
+    this.audioFile,
     RxList<LocalSubtitleSegment>? segments,
   }) : segments = segments ?? <LocalSubtitleSegment>[].obs;
 
-  /// 音频流地址（无音频时退化为视频流地址）
+  /// 音频流地址（在线模式；无音频时退化为视频流地址）
   final String audioUrl;
+
+  /// 本地音频文件路径（离线模式，audio.m4s）；非空时优先于网络下载
+  final String? audioFile;
+
+  bool get _isFileMode => audioFile != null;
+
+  RandomAccessFile? _raf;
 
   /// 视频总时长（秒）
   final int totalSeconds;
@@ -62,20 +70,27 @@ class IncrementalRecognizer extends GetxController {
 
   CancelToken? _cancelToken;
   bool _cancelled = false;
-  int _nextChunkStart = 0;
   int? _totalBytes;
   Uint8List? _initHeader;
   bool _rangeSupported = false;
-  double _lastEnd = 0;
+
+  /// 每个识别块的时长（秒）。整片按此长度切块，块优先级队列调度。
+  static const int blockSeconds = 60;
+
+  /// 单块最多尝试次数，超过则跳过该块（避免无限重试卡住队列）
+  static const int _maxTriesPerBlock = 3;
+
+  /// 已完成/已跳过的块号
+  final Set<int> _settledBlocks = {};
+
+  /// 每块已尝试次数
+  final Map<int, int> _blockTries = {};
 
   /// 连续转写失败次数，达到阈值直接报错退出，避免无限「识别中」
   int _consecutiveFailures = 0;
 
   /// 后台翻译串行队列：翻译不再阻塞识别循环，识别先出原文、中文后台补齐
   Future<void> _backgroundTranslations = Future<void>.value();
-
-  /// 跟随播放模式下已识别到的最远秒数（增量追加，避免重复转写）
-  double _recognizedEnd = 0;
 
   /// 音频流的媒体 timescale（来自 mdhd/mvhd），用于把 tfdt 解码时间换算为秒
   int _timescale = 0;
@@ -115,12 +130,7 @@ class IncrementalRecognizer extends GetxController {
       0,
       totalSeconds,
     );
-    _nextChunkStart = startPos;
-    // 跟随播放：识别窗口回看当前位置前若干秒，尽快出首条字幕
-    _recognizedEnd = (startPos - halfWindowSeconds)
-        .clamp(0, totalSeconds)
-        .toDouble();
-    _lastEnd = _recognizedEnd;
+    SubtitleDebugLog.instance.log('起始位置参考 ${_fmt(startPos.toInt())}');
     _cancelToken = CancelToken();
     try {
       final m = model;
@@ -141,6 +151,8 @@ class IncrementalRecognizer extends GetxController {
         SubtitleDebugLog.instance.log('识别失败：$e');
       }
     } finally {
+      await _raf?.close();
+      _raf = null;
       running.value = false;
       if (!_cancelled && segments.isEmpty) {
         status.value = '未识别到语音内容';
@@ -164,6 +176,43 @@ class IncrementalRecognizer extends GetxController {
   }
 
   Future<void> _prepare() async {
+    if (_isFileMode) {
+      await _prepareFile();
+    } else {
+      await _prepareHttp();
+    }
+  }
+
+  /// 离线模式：直接打开本地 audio.m4s。
+  ///
+  /// 文件头部第一个 moof 之前的部分（ftyp+moov）就是 init 头，字节→时间点
+  /// 与在线版同一套 moof/tfdt 机制，但读取是本地的，没有下载等待。
+  Future<void> _prepareFile() async {
+    final file = audioFile!;
+    if (!await File(file).exists()) {
+      throw '音频文件不存在：$file';
+    }
+    final raf = await RandomAccessFile.open(file, FileMode.read);
+    _raf = raf;
+    _totalBytes = await raf.length();
+    _rangeSupported = true;
+    final probeLen = _totalBytes! > 524288 ? 524288 : _totalBytes!;
+    await raf.setPosition(0);
+    final head = Uint8List.fromList(await raf.read(probeLen));
+    final moofInset = _findMoofType(head, 0);
+    final initLen = moofInset >= 4 ? moofInset - 4 : -1;
+    if (initLen <= 0) {
+      throw '无法解析本地音频流（未找到 fMP4 头）';
+    }
+    _initHeader = Uint8List.sublistView(head, 0, initLen);
+    _parseTimescale(_initHeader!);
+    SubtitleDebugLog.instance.log(
+      '本地流: initHeader=${_initHeader!.length}B timescale=$_timescale '
+      'totalBytes=$_totalBytes',
+    );
+  }
+
+  Future<void> _prepareHttp() async {
     // 探测 Range 支持与 init segment 边界（第一个 moof 出现的位置）
     const probe = 65536;
     final probeRes = await Request.dio.get<List<int>>(
@@ -380,93 +429,108 @@ class IncrementalRecognizer extends GetxController {
     return _readU32(data, offset) * 4294967296 + _readU32(data, offset + 4);
   }
 
-  Future<void> _run() async {
-    if (followPlayback) {
-      await _runFollow();
-    } else {
-      await _runSequential();
-    }
-  }
+  Future<void> _run() async => _runBlockQueue();
 
-  /// 顺序识别整段：从起始位置按固定长度分段往后识别，直到末尾。
-  Future<void> _runSequential() async {
+  int get _blockCount => (totalSeconds + blockSeconds - 1) ~/ blockSeconds;
+
+  /// 用户跳转次数。块执行期间发生跳转时丢弃该块结果重新选块，
+  /// 保证「优先识别用户当前进度」，且跳转不消耗该块的重试次数。
+  int _seekEpoch = 0;
+
+  /// 块优先级队列调度：
+  /// - 整片按 [blockSeconds] 切块；
+  /// - 跟随模式下，从当前播放位置所在块开始环形取第一个未完成的块
+  ///   （刚打开就拖进度 → 先认当前位置；回溯到已认过的块 → 直接跳过）；
+  /// - 顺序模式依次从第 0 块往后补齐。
+  Future<void> _runBlockQueue() async {
     while (!_cancelled) {
-      final chunkStart = _nextChunkStart;
-      if (chunkStart >= totalSeconds) {
+      final blk = _pickBlock();
+      if (blk == null) {
         break;
       }
-      final chunkEnd = (chunkStart + chunkSeconds).clamp(0, totalSeconds);
-      status.value = '识别 ${_fmt(chunkStart)}~${_fmt(chunkEnd)}';
-      try {
-        final added = await _processChunk(chunkStart, chunkEnd);
-        if (added) {
-          segments.refresh();
-        }
-      } catch (e) {
-        if (_cancelled) {
-          break;
-        }
-        // 单段失败不中断整体，跳过该段继续
-        status.value = '段 ${_fmt(chunkStart)} 失败：$e';
-      }
-      _nextChunkStart = chunkEnd;
-    }
-  }
-
-  /// 跟随播放：以当前播放位置为中心，保持识别窗口覆盖到「当前位置 + 8 秒」。
-  ///
-  /// 播放前进后只追加识别新增区间（增量），已处理部分不再重复转写；
-  /// 首次启动回看当前位置前 halfWindowSeconds 秒，形成「前后窗口」。
-  Future<void> _runFollow() async {
-    while (!_cancelled) {
-      final pos = (positionProvider?.call() ?? _nextChunkStart).clamp(
-        0,
-        totalSeconds,
+      final epoch = _seekEpoch;
+      final tries = (_blockTries[blk] = (_blockTries[blk] ?? 0) + 1);
+      final s0 = blk * blockSeconds;
+      final s1 = (s0 + blockSeconds) > totalSeconds
+          ? totalSeconds
+          : s0 + blockSeconds;
+      SubtitleDebugLog.instance.log(
+        '开始块 $blk/${_blockCount - 1} ${_fmt(s0)}~${_fmt(s1)} 第$tries次尝试',
       );
-      if (pos >= totalSeconds - 1) {
-        break;
-      }
-      final winEnd = (pos + followLookaheadSeconds).clamp(0, totalSeconds);
-      if (winEnd <= _recognizedEnd) {
-        // 播放未前进（暂停/缓冲）：给出明确状态，避免误以为卡死
-        if (status.value != '等待播放进度…') {
-          status.value = '等待播放进度…（当前位置 ${_fmt(pos)}）';
-          SubtitleDebugLog.instance.log(
-            '等待播放进度: pos=${_fmt(pos)} 已识别到=${_fmt(_recognizedEnd.floor())}',
-          );
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 600));
-        continue;
-      }
-      final winStart = _recognizedEnd.floor();
-      status.value = '识别 ${_fmt(winStart)}~${_fmt(winEnd)}';
-      final startedAt = DateTime.now();
       try {
-        final added = await _processChunk(winStart, winEnd);
-        final cost = DateTime.now().difference(startedAt).inMilliseconds;
-        SubtitleDebugLog.instance.log(
-          '段识别完成 ${_fmt(winStart)}~${_fmt(winEnd)} '
-          '耗时${cost}ms 新增=${added ? '是' : '否'} '
-          '累计${segments.length}条',
-        );
+        final added = await _processChunk(s0, s1);
+        if (_seekEpoch != epoch) {
+          // 识别期间用户切换了位置：结果可能已过时，退回队列重新选块
+          _blockTries[blk] = tries - 1;
+          SubtitleDebugLog.instance.log('块 $blk 执行期间发生跳转，重新调度');
+          continue;
+        }
         if (added) {
           segments.refresh();
         }
-        _recognizedEnd = winEnd.toDouble();
-        _nextChunkStart = winEnd;
+        _settledBlocks.add(blk);
+        SubtitleDebugLog.instance.log('块完成 $blk 累计${segments.length}条');
       } catch (e) {
         if (_cancelled) {
           break;
         }
-        status.value = '段 ${_fmt(winStart)} 失败：$e';
-        SubtitleDebugLog.instance.log(
-          '段失败 ${_fmt(winStart)}~${_fmt(winEnd)}：$e',
-        );
-        // 失败也推进起点，避免死循环反复识别同一段
-        _recognizedEnd = winEnd.toDouble();
-        _nextChunkStart = winEnd;
+        if (_seekEpoch != epoch) {
+          _blockTries[blk] = tries - 1;
+          continue;
+        }
+        SubtitleDebugLog.instance.log('块失败 $blk ${_fmt(s0)}（第$tries次）：$e');
+        if (tries >= _maxTriesPerBlock) {
+          _settledBlocks.add(blk);
+          status.value = '${_fmt(s0)} 处的字幕识别失败，已跳过';
+        }
       }
     }
+  }
+
+  int? _pickBlock() {
+    final startIdx = followPlayback
+        ? ((positionProvider?.call() ?? 0).clamp(0, totalSeconds) ~/
+                  blockSeconds)
+              .toInt()
+        : 0;
+    final count = _blockCount;
+    for (var i = 0; i < count; i++) {
+      final b = (startIdx + i) % count;
+      if (!_settledBlocks.contains(b) &&
+          (b + 1) * blockSeconds <= totalSeconds + blockSeconds &&
+          (_blockTries[b] ?? 0) < _maxTriesPerBlock) {
+        return b;
+      }
+    }
+    return null;
+  }
+
+  /// 读取一段字节区间：本地文件用 RandomAccessFile 随机读；
+  /// 在线走 HTTP Range 请求。
+  Future<Uint8List> _fetchRange(int b0, int rangeEnd) async {
+    if (_isFileMode) {
+      final raf = _raf!;
+      final total = _totalBytes ?? 0;
+      final end = rangeEnd >= total ? total - 1 : rangeEnd;
+      final len = end - b0 + 1;
+      if (len <= 0) {
+        return Uint8List(0);
+      }
+      await raf.setPosition(b0);
+      return await raf.read(len);
+    }
+    final res = await Request.dio.get<List<int>>(
+      audioUrl,
+      cancelToken: _cancelToken,
+      options: Options(
+        responseType: ResponseType.bytes,
+        headers: {'Range': 'bytes=$b0-$rangeEnd'},
+        validateStatus: (s) => s == 206 || s == 200,
+        sendTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 60),
+      ),
+    );
+    return Uint8List.fromList(res.data ?? const []);
   }
 
   Future<bool> _processChunk(int s0, int s1) async {
@@ -479,27 +543,17 @@ class IncrementalRecognizer extends GetxController {
     final b0 = (s0 * bps).round();
     final b1 = (s1 * bps).round();
     final rangeEnd = b1 + tailExtra;
-    final res = await Request.dio.get<List<int>>(
-      audioUrl,
-      cancelToken: _cancelToken,
-      options: Options(
-        responseType: ResponseType.bytes,
-        headers: {'Range': 'bytes=$b0-$rangeEnd'},
-        validateStatus: (s) => s == 206 || s == 200,
-        sendTimeout: const Duration(seconds: 30),
-        receiveTimeout: const Duration(seconds: 60),
-      ),
-    );
+    final res = await _fetchRange(b0, rangeEnd);
     if (_cancelled) {
       return false;
     }
-    var slice = Uint8List.fromList(res.data ?? const []);
+    var slice = res;
     SubtitleDebugLog.instance.log(
-      '分段请求 [$s0-$s1]s bytes=$b0-$rangeEnd '
-      'status=${res.statusCode} 收到=${slice.length}B bps=${bps.toStringAsFixed(1)}',
+      '分段请求 [$s0-$s1]s bytes=$b0-$rangeEnd 收到=${slice.length}B '
+      'bps=${bps.toStringAsFixed(1)}${_isFileMode ? ' 本地' : ''}',
     );
     if (slice.isEmpty) {
-      throw '音频分段下载失败';
+      throw '音频分段读取失败';
     }
     if (!_rangeSupported) {
       // 服务器不支持 Range，退化为整段（此次返回的是完整文件）
@@ -666,6 +720,8 @@ class IncrementalRecognizer extends GetxController {
     });
   }
 
+  /// 合入一段转写结果：块调度可能乱序产出，且重试块会与已识别区间重叠。
+  /// 时间上重叠的分段保留时长更长（内容更完整）的一条，最后整体按开始时间排序。
   bool _append(
     RxList<LocalSubtitleSegment> target,
     List<LocalSubtitleSegment> list,
@@ -673,16 +729,31 @@ class IncrementalRecognizer extends GetxController {
     if (list.isEmpty) {
       return false;
     }
+    final merged = <LocalSubtitleSegment>[...target];
     var changed = false;
     for (final seg in list) {
-      if (seg.from < _lastEnd - 1.5) {
+      final overlaps = [
+        for (final s in merged)
+          if (s.from < seg.to - 0.5 && seg.from < s.to - 0.5) s,
+      ];
+      if (overlaps.isEmpty) {
+        merged.add(seg);
+        changed = true;
         continue;
       }
-      target.add(seg);
-      if (seg.to > _lastEnd) {
-        _lastEnd = seg.to;
+      final shortest = overlaps.reduce(
+        (a, b) => (a.to - a.from) <= (b.to - b.from) ? a : b,
+      );
+      if ((seg.to - seg.from) > (shortest.to - shortest.from)) {
+        merged
+          ..remove(shortest)
+          ..add(seg);
+        changed = true;
       }
-      changed = true;
+    }
+    if (changed) {
+      merged.sort((a, b) => a.from.compareTo(b.from));
+      target.assignAll(merged);
     }
     return changed;
   }
@@ -720,19 +791,17 @@ class IncrementalRecognizer extends GetxController {
     _cancelToken?.cancel('stopped');
   }
 
-  /// 播放位置跳变（拖动进度条）时调用：跟随模式下从新位置继续
+  /// 播放位置跳变（拖动进度条）时调用：
+  /// 已识别结果全部保留（回看已认过的区间直接可看，不清空），
+  /// 仅递增跳转世代，让正在执行的块完成后丢弃结果并重新按新位置选块。
   void onSeek(int newPosition) {
     if (!followPlayback || _cancelled) {
       return;
     }
-    SubtitleDebugLog.instance.log('检测到跳转 -> ${_fmt(newPosition)}');
-    segments.removeWhere((s) => s.from >= newPosition - 2);
-    final pos = newPosition.clamp(0, totalSeconds);
-    _nextChunkStart = pos;
-    _recognizedEnd = (pos - halfWindowSeconds)
-        .clamp(0, totalSeconds)
-        .toDouble();
-    _lastEnd = _recognizedEnd - 1.5;
+    _seekEpoch++;
+    SubtitleDebugLog.instance.log(
+      '检测到跳转 -> ${_fmt(newPosition)}，保留已有 ${segments.length} 条字幕',
+    );
   }
 
   @override

@@ -168,13 +168,22 @@ class _SubtitleListState extends State<_SubtitleList> {
       }
       final ctx = _rowKeys[active]?.currentContext;
       if (ctx != null) {
+        // 歌词式居中：当前行滚动到列表中部
         Scrollable.ensureVisible(
           ctx,
-          alignment: 0.4,
-          duration: const Duration(milliseconds: 250),
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
         );
       }
     });
+  }
+
+  void _onTapSegment(int fromSeconds) {
+    // 点击字幕跳转到对应进度，并恢复自动跟随滚动
+    _follow = true;
+    _lastActive = -1;
+    playerController.seekTo(Duration(seconds: fromSeconds));
   }
 
   @override
@@ -220,6 +229,7 @@ class _SubtitleListState extends State<_SubtitleList> {
         },
         child: ListView.builder(
           controller: _scroll,
+          padding: const EdgeInsets.symmetric(vertical: 80),
           itemCount: segments.length,
           itemBuilder: (context, index) {
             final seg = segments[index];
@@ -228,40 +238,53 @@ class _SubtitleListState extends State<_SubtitleList> {
             return AnimatedOpacity(
               key: _rowKeys.putIfAbsent(index, GlobalKey.new),
               duration: const Duration(milliseconds: 200),
-              opacity: isPassed && !isActive ? 0.5 : 1,
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: isActive
-                      ? theme.colorScheme.primaryContainer
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      seg.text,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: isActive ? FontWeight.w600 : null,
-                      ),
-                    ),
-                    if (seg.translated != null && seg.translated!.isNotEmpty)
+              opacity: isPassed && !isActive ? 0.45 : 1,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _onTapSegment(seg.from.toInt()),
+                child: Container(
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 2,
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isActive
+                        ? theme.colorScheme.primaryContainer.withValues(
+                            alpha: 0.45,
+                          )
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        seg.translated!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                        seg.text,
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.primary,
+                          fontSize: isActive ? 16.5 : null,
+                          fontWeight: isActive
+                              ? FontWeight.w700
+                              : FontWeight.w400,
+                          color: isActive ? theme.colorScheme.primary : null,
                         ),
                       ),
-                  ],
+                      if (seg.translated != null && seg.translated!.isNotEmpty)
+                        Text(
+                          seg.translated!,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontSize: isActive ? 15 : null,
+                            color: theme.colorScheme.primary,
+                            fontWeight: isActive
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             );

@@ -166,13 +166,10 @@ class VideoDetailController extends GetxController
       ? plPlayerController.showVideoReply
       : plPlayerController.showBangumiReply;
 
-  /// 「字幕」标签在视频页首页 Tab 栏中的下标（在线视频：简介 + 可选评论之后）。
+  /// 「字幕」标签在视频页首页 Tab 栏中的下标（简介 + 可选评论之后）。
   ///
-  /// 供播放器 cc 按钮竖屏时跳转到字幕 Tab 使用；本地文件或不可用时返回 null。
+  /// 供播放器 cc 按钮竖屏时跳转到字幕 Tab 使用。
   int? get liveSubtitleTabIndex {
-    if (isFileSource) {
-      return null;
-    }
     var idx = 1; // 简介
     if (showReply) {
       idx++;
