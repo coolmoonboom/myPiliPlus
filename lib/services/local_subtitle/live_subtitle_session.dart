@@ -247,6 +247,29 @@ class LiveSubtitleSession extends GetxController {
     running.value = false;
   }
 
+  /// 修改某条字幕的原文/译文（按时间定位，面板长按编辑入口调用）。
+  ///
+  /// 立即强制刷新注入的字幕轨，视频上的字幕同步更新。
+  void updateSegment({
+    required double from,
+    required double to,
+    required String text,
+    String? translated,
+  }) {
+    final idx = segments.indexWhere((s) => s.from == from && s.to == to);
+    if (idx < 0) {
+      return;
+    }
+    segments[idx] = LocalSubtitleSegment(
+      from: from,
+      to: to,
+      text: text,
+      translated: translated,
+    );
+    segments.refresh();
+    unawaited(_inject(force: true));
+  }
+
   /// 导出识别结果为 SRT
   Future<void> exportSrt() async {
     final segs = segments.toList();

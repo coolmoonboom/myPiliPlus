@@ -4,6 +4,7 @@ import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/pages/video/subtitle_ai/segment_actions.dart';
 import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
 
 /// 在线视频页「字幕」标签页内容：展示增量识别出的字幕（逐行滚动、双语）。
@@ -242,6 +243,12 @@ class _SubtitleListState extends State<_SubtitleList> {
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
                 onTap: () => _onTapSegment(seg.from.toInt()),
+                onLongPress: () => showSegmentActions(
+                  context,
+                  session: session,
+                  playerController: playerController,
+                  segment: seg,
+                ),
                 child: Container(
                   margin: const EdgeInsets.symmetric(
                     horizontal: 12,
