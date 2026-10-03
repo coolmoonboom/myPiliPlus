@@ -139,3 +139,10 @@ Entries discovered by the Agent during task execution should follow this format:
 - Category: Troubleshooting & Debugging
 - Instructions:
   - 本项目 Flutter SDK 的 dart:io 没有 `RandomAccessFile.open(...)` 静态方法，随机读文件要用 `File(path).openSync()`（返回 RandomAccessFile，默认 read 模式）；本地无 flutter 环境时本地 dart 分析发现不了这类 SDK 差异，最终以 CI 为准。
+[Dart 级联与 arrow-lambda 混合的编译陷阱]
+- Date: 2026-10-03
+- Context: CI 报 "The setter 'releaseModelOnExit' isn't defined for the type 'int'"
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 写法 `..prop = () => expr..other = v` 会把第二个级联吞进 lambda 返回值上，dart format 与本地无包分析均不报错，只有 CI 编译暴露。级联里含函数字面量时，函数赋值单独成行。
+  - Release 资产 label 含中文长文本可能被拒（4-byte Unicode）；用 ASCII label 稳妥。
