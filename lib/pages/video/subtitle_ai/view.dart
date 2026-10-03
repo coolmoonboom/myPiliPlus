@@ -1,7 +1,6 @@
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
@@ -214,7 +213,7 @@ class _SubtitleListState extends State<_SubtitleList> {
       return NotificationListener<UserScrollNotification>(
         onNotification: (n) {
           // 用户手动滚动时暂停自动跟随，滚回底部后恢复
-          if (n.direction != ScrollDirection.idle) {
+          if (n.direction != .idle) {
             _follow = false;
           }
           return false;
