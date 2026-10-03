@@ -125,3 +125,11 @@ Entries discovered by the Agent during task execution should follow this format:
   - `expr case P` 只有作为 if/while 条件的**唯一/末尾**守卫时才安全（如 `if (foo() case final x?)`）；一旦前面还有 `&&`，就不要用 case 模式。
   - 修法：改为嵌套 `if (a is Map) { final v = a['k']; if (v is Map) {...} }`，不用 case 模式。
   - 排查时可用 `/opt/dart314/dart-sdk/bin/dart` 写最小复现脚本确认行为。
+
+[material_ui 与 flutter/material 禁止混导]
+- Date: 2026-10-03
+- Context: Discovered by Agent while fixing build failure (CI run 37091894362)
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 本项目 UI 层只允许 `package:material_ui/material_ui.dart`（它 export flutter/widgets.dart 并重定义 Theme/Icons/Colors/FilledButton 等）；任何文件再显式 import 'package:flutter/material.dart' 会引发大量 "imported from both" 编译错误。
+  - 缺符号（如 ScrollDirection/UserScrollNotification）时优先用 material_ui 已导出的 widgets 符号 + Dart 3 枚举简写（`n.direction != .idle`、`position.userScrollDirection == .forward`），参考 lib/pages/live_room/controller.dart；确有文件同时导两者时须逐个 hide 冲突符号，避免。
