@@ -183,9 +183,9 @@ class LiveSubtitleSession extends GetxController {
     recognizer
       ..model = _model
       ..bilingual = _bilingual
-      ..followPlayback = _followPlayback
-      ..positionProvider = () =>
-          plPlayerController.position.value..releaseModelOnExit = false;
+      ..followPlayback = _followPlayback;
+    recognizer.positionProvider = () => plPlayerController.position.value;
+    recognizer.releaseModelOnExit = false;
     SubtitleDebugLog.instance.log(
       '复用识别器：已保留 ${segments.length} 条结果，'
       '剩余块将继续按优先队列识别',
