@@ -1300,20 +1300,17 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   /// 长按「字幕」tab：自下而上弹出片段循环面板，顶部不超出 tab 栏，
   /// 内容与播放器里的片段循环卡片一致（无识别出的字幕时的循环入口）。
-  void _showAbLoopSheet(BuildContext tabContext) {
-    Feedback.forLongPress(tabContext);
-    final render = tabContext.findRenderObject();
-    double bottomY = kTextTabBarHeight;
-    if (render is RenderBox) {
-      bottomY = render.localToGlobal(Offset.zero).dy + render.size.height;
-    }
-    final screenH = MediaQuery.sizeOf(tabContext).height;
+  void _showAbLoopSheet(BuildContext context) {
+    Feedback.forLongPress(context);
     final ctr = videoDetailController.plPlayerController;
+    final screenH = MediaQuery.sizeOf(context).height;
     showModalBottomSheet(
-      context: tabContext,
+      context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      constraints: BoxConstraints(maxHeight: max(220.0, screenH - bottomY)),
+      constraints: BoxConstraints(
+        maxHeight: max(220.0, min(screenH * 0.45, screenH - 220.0)),
+      ),
       builder: (sheetContext) => SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
@@ -1401,16 +1398,11 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
               );
             });
           } else if (text == '字幕') {
-            return Tab(
-              child: Builder(
-                builder: (tabContext) => GestureDetector(
-                  onLongPress: () => _showAbLoopSheet(tabContext),
-                  child: Text(
-                    text,
-                    softWrap: false,
-                    overflow: .visible,
-                  ),
-                ),
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onLongPress: () => _showAbLoopSheet(context),
+              child: Tab(
+                child: Text(text, softWrap: false, overflow: .visible),
               ),
             );
           } else {
