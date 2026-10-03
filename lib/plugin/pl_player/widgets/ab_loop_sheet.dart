@@ -10,9 +10,12 @@ import 'package:get/get.dart';
 /// 2. 「起点 A」「终点 B」为追踪按钮：激活后拖动进度条/播放时实时写入点位
 /// 3. 每行支持点击时间手动输入、取「当前」位置、单独「清除」
 class AbLoopCard extends StatelessWidget {
-  const AbLoopCard({required this.controller, super.key});
+  const AbLoopCard({required this.controller, this.onClose, super.key});
 
   final PlPlayerController controller;
+
+  /// 关闭卡片的行为；为空时使用播放器内嵌面板的显隐开关
+  final VoidCallback? onClose;
 
   static String _fmt(int seconds) =>
       seconds < 0 ? '未设置' : DurationUtils.formatDuration(seconds);
@@ -117,7 +120,7 @@ class AbLoopCard extends StatelessWidget {
                     tooltip: '关闭',
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.close, size: 18),
-                    onPressed: controller.toggleAbLoopPanel,
+                    onPressed: onClose ?? controller.toggleAbLoopPanel,
                   ),
                 ],
               );

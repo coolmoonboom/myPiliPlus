@@ -3,6 +3,7 @@ import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/utils/utils.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// 长按字幕单条后的操作：复制或编辑（原文与译文）。
@@ -62,6 +63,23 @@ class _SegmentActionSheet extends StatelessWidget {
             onTap: () {
               Navigator.of(context).maybePop();
               Utils.copyText(_copyText);
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.repeat, size: 20),
+            title: const Text('循环这句'),
+            subtitle: const Text('把这句字幕设为片段循环并立即开始'),
+            onTap: () {
+              Navigator.of(context).maybePop();
+              final from = segment.from.toInt();
+              final to = segment.to.ceil() > from
+                  ? segment.to.ceil()
+                  : from + 1;
+              playerController.setAbLoopStart(from);
+              playerController.setAbLoopEnd(to);
+              playerController.setAbLoopEnabled(true);
+              SmartDialog.showToast('已循环播放该句');
             },
           ),
           ListTile(

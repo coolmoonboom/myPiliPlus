@@ -53,6 +53,7 @@ import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/plugin/pl_player/view/view.dart';
+import 'package:PiliPlus/plugin/pl_player/widgets/ab_loop_sheet.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService;
@@ -1297,6 +1298,37 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         : child;
   }
 
+  /// 长按「字幕」tab：自下而上弹出片段循环面板，顶部不超出 tab 栏，
+  /// 内容与播放器里的片段循环卡片一致（无识别出的字幕时的循环入口）。
+  void _showAbLoopSheet(BuildContext tabContext) {
+    Feedback.forLongPress(tabContext);
+    final render = tabContext.findRenderObject();
+    double bottomY = kTextTabBarHeight;
+    if (render is RenderBox) {
+      bottomY = render.localToGlobal(Offset.zero).dy + render.size.height;
+    }
+    final screenH = MediaQuery.sizeOf(tabContext).height;
+    final ctr = videoDetailController.plPlayerController;
+    showModalBottomSheet(
+      context: tabContext,
+      isScrollControlled: true,
+      useSafeArea: true,
+      constraints: BoxConstraints(maxHeight: max(220.0, screenH - bottomY)),
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+          child: AbLoopCard(
+            controller: ctr,
+            onClose: () => Navigator.of(sheetContext).maybePop(),
+          ),
+        ),
+      ),
+    )?.whenComplete(() {
+      // 面板关闭后停止起/终点追踪，避免无面板时静默写点
+      ctr.abLoopTracking.value = 0;
+    });
+  }
+
   Widget buildTabBar({
     bool needIndicator = true,
     String? introText,
@@ -1368,6 +1400,19 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                 ),
               );
             });
+          } else if (text == '字幕') {
+            return Tab(
+              child: Builder(
+                builder: (tabContext) => GestureDetector(
+                  onLongPress: () => _showAbLoopSheet(tabContext),
+                  child: Text(
+                    text,
+                    softWrap: false,
+                    overflow: .visible,
+                  ),
+                ),
+              ),
+            );
           } else {
             return Tab(
               child: Text(text, softWrap: false, overflow: .visible),
