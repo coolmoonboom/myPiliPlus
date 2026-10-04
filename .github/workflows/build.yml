@@ -106,7 +106,7 @@ jobs:
 
             - name: Flutter Build Release Apk
               if: ${{ github.event_name == 'workflow_dispatch' }}
-              run: flutter build apk --release --target-platform android-arm64 --dart-define-from-file=pili_release.json --no-pub
+              run: flutter build apk --release --split-per-abi --dart-define-from-file=pili_release.json --no-pub
 
             - name: Flutter Build Dev Apk
               if: ${{ github.event_name == 'pull_request' }}
@@ -136,7 +136,7 @@ jobs:
               uses: actions/upload-artifact@v7
               with:
                   archive: false
-                  name: Android_arm64-v8a
+                  name: Android-apk
                   path: piliplusfr_android_*.apk
 
 
