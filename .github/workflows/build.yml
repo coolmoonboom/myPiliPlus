@@ -135,7 +135,6 @@ jobs:
             - name: 上传
               uses: actions/upload-artifact@v7
               with:
-                  archive: false
                   name: Android-apk
                   path: piliplusfr_android_*.apk
 
