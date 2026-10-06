@@ -4,7 +4,6 @@ import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
-import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
@@ -37,8 +36,8 @@ Future<void>? showSubtitleBottomSheet(
 
 /// AI 字幕设置面板（竖屏字幕页与横屏字幕按钮共用）。
 ///
-/// 包含：模型下载/暂停/继续/卸载、双语开关、跟随播放开关、导入本地字幕、
-/// 翻译设置。
+/// 包含：模型下载/暂停/继续/卸载、双语开关、跟随播放开关、字幕时间偏移
+/// （基准 + 精细调控）、翻译设置。
 class AiSubtitleSettingsSheet extends StatefulWidget {
   const AiSubtitleSettingsSheet({
     required this.videoDetailController,
@@ -727,120 +726,3 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
   }
 }
 
-/// AI 字幕调试日志面板：展示 [SubtitleDebugLog] 记录的
-/// 模型/音频探测/分段下载/转写/翻译全链路信息，用于排查「一直识别中」。
-class SubtitleDebugLogSheet extends StatefulWidget {
-  const SubtitleDebugLogSheet({super.key});
-
-  @override
-  State<SubtitleDebugLogSheet> createState() => _SubtitleDebugLogSheetState();
-}
-
-class _SubtitleDebugLogSheetState extends State<SubtitleDebugLogSheet> {
-  final ScrollController _scroll = ScrollController();
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(
-          _scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return SafeArea(
-      child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.7,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'AI 字幕调试日志',
-                      style: theme.textTheme.titleMedium,
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () async {
-                      final text = SubtitleDebugLog.instance.dump;
-                      if (text.isEmpty) {
-                        SmartDialog.showToast('暂无日志');
-                        return;
-                      }
-                      await Clipboard.setData(ClipboardData(text: text));
-                      SmartDialog.showToast('日志已复制');
-                    },
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: const Text('复制'),
-                  ),
-                  TextButton.icon(
-                    onPressed: () {
-                      SubtitleDebugLog.instance.clear();
-                      _scrollToBottom();
-                    },
-                    icon: const Icon(Icons.clear_all, size: 16),
-                    label: const Text('清空'),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: Obx(() {
-                final entries = SubtitleDebugLog.instance.entries.toList();
-                if (entries.isEmpty) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        '暂无日志。开始一次实时字幕识别后会记录：模型状态、'
-                        '音频探测、分段下载、转写与翻译耗时等。',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.outline,
-                        ),
-                      ),
-                    ),
-                  );
-                }
-                _scrollToBottom();
-                return ListView.builder(
-                  controller: _scroll,
-                  padding: const EdgeInsets.all(12),
-                  itemCount: entries.length,
-                  itemBuilder: (context, i) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 3),
-                      child: Text(
-                        entries[i],
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontSize: 11,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    );
-                  },
-                );
-              }),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
