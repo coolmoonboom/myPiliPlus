@@ -1403,6 +1403,16 @@ class HeaderControlState extends State<HeaderControl>
           setState(() {});
         }
 
+        // 将偏移值回填到「时/分/秒」输入框，供滑块联动使用。
+        void syncOffsetFields(double offset) {
+          final abs = offset.abs().round();
+          hourController.text = abs ~/ 3600 == 0 ? '' : '${abs ~/ 3600}';
+          minuteController.text = (abs % 3600) ~/ 60 == 0
+              ? ''
+              : '${(abs % 3600) ~/ 60}';
+          secondController.text = abs % 60 == 0 ? '' : '${abs % 60}';
+        }
+
         void updateOffsetFromFields() {
           final h = int.tryParse(hourController.text.trim()) ?? 0;
           final m = int.tryParse(minuteController.text.trim()) ?? 0;
@@ -1411,6 +1421,18 @@ class HeaderControlState extends State<HeaderControl>
           plPlayerController
             ..subtitleOffset = (offsetLater ? total : -total).toDouble()
             ..applySubtitleDelay();
+          setState(() {});
+        }
+
+        // 精细调控滑块：按秒调节，范围前后各 10 分钟。
+        void updateOffsetFromSlider(double val) {
+          final rounded = val.roundToDouble();
+          offsetLater = rounded >= 0;
+          plPlayerController
+            ..subtitleOffset = rounded
+            ..subtitleOffsetEnabled = true
+            ..applySubtitleDelay();
+          syncOffsetFields(rounded);
           setState(() {});
         }
 
@@ -1608,6 +1630,32 @@ class HeaderControlState extends State<HeaderControl>
                       ),
                       const SizedBox(height: 12),
                       Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('精细调控（按秒）'),
+                          Text(
+                            _formatSubtitleOffset(subtitleOffset),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Padding(
+                        padding: sliderPadding,
+                        child: Slider(
+                          min: -600,
+                          max: 600,
+                          divisions: 1200,
+                          value: subtitleOffset
+                              .clamp(-600.0, 600.0)
+                              .toDouble(),
+                          label: _formatSubtitleOffset(subtitleOffset),
+                          onChanged: updateOffsetFromSlider,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
                         children: [
                           Expanded(
                             child: TextField(
@@ -1660,7 +1708,8 @@ class HeaderControlState extends State<HeaderControl>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '填写字幕需要整体移动的时间，例如延后 1 分 30 秒。',
+                        '可拖动上方滑块按秒精细调节，也可在下方填写需要整体移动的时间'
+                        '（例如延后 1 分 30 秒）。',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.outline,
                         ),

@@ -331,12 +331,22 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   /// 字幕时间偏移（秒）。正值字幕延后出现，负值提前。
   ///
-  /// 仅当前会话/当前视频有效，不跨视频保留：不同视频的字幕时间轴不同，
-  /// 若沿用上一段视频的偏移会让新视频（含导入字幕）整体错位。
-  double subtitleOffset = 0;
+  /// 用响应式字段承载，保证竖屏「每句字幕」列表能即时跟随偏移变化
+  /// （暂停时不会再有播放进度更新来触发重建）。
+  final RxDouble _subtitleOffset = 0.0.obs;
 
   /// 是否启用字幕时间偏移。
-  bool subtitleOffsetEnabled = false;
+  final RxBool _subtitleOffsetEnabled = false.obs;
+
+  /// 仅当前会话/当前视频有效，不跨视频保留：不同视频的字幕时间轴不同，
+  /// 若沿用上一段视频的偏移会让新视频（含导入字幕）整体错位。
+  double get subtitleOffset => _subtitleOffset.value;
+
+  set subtitleOffset(double value) => _subtitleOffset.value = value;
+
+  bool get subtitleOffsetEnabled => _subtitleOffsetEnabled.value;
+
+  set subtitleOffsetEnabled(bool value) => _subtitleOffsetEnabled.value = value;
 
   // settings
   late final showFSActionItem = Pref.showFSActionItem;
