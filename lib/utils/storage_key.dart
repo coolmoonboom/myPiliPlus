@@ -176,9 +176,7 @@ abstract final class SettingBoxKey {
       subtitleStrokeWidth = 'subtitleStrokeWidth',
       subtitleFontScale = 'subtitleFontScale',
       subtitleFontScaleFS = 'subtitleFontScaleFS',
-      subtitleFontWeight = 'subtitleFontWeight',
-      subtitleOffset = 'subtitleOffset',
-      subtitleOffsetEnabled = 'subtitleOffsetEnabled';
+      subtitleFontWeight = 'subtitleFontWeight';
 
   static const String webdavUri = 'webdavUri',
       webdavUsername = 'webdavUsername',

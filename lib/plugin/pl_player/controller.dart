@@ -330,10 +330,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   late int subtitleFontWeight = Pref.subtitleFontWeight;
 
   /// 字幕时间偏移（秒）。正值字幕延后出现，负值提前。
-  late double subtitleOffset = Pref.subtitleOffset;
+  ///
+  /// 仅当前会话/当前视频有效，不跨视频保留：不同视频的字幕时间轴不同，
+  /// 若沿用上一段视频的偏移会让新视频（含导入字幕）整体错位。
+  double subtitleOffset = 0;
 
   /// 是否启用字幕时间偏移。
-  late bool subtitleOffsetEnabled = Pref.subtitleOffsetEnabled;
+  bool subtitleOffsetEnabled = false;
 
   // settings
   late final showFSActionItem = Pref.showFSActionItem;
@@ -761,6 +764,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       'volume':
           (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)
               .toString(),
+      // 基线归零，避免上一次播放残留的 sub-delay 影响新视频字幕。
+      'sub-delay': '0',
     };
     final autosync = Pref.autosync;
     if (autosync != '0') {
@@ -1658,8 +1663,6 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       SettingBoxKey.subtitleBgOpacity: subtitleBgOpacity,
       SettingBoxKey.subtitleStrokeWidth: subtitleStrokeWidth,
       SettingBoxKey.subtitleFontWeight: subtitleFontWeight,
-      SettingBoxKey.subtitleOffset: subtitleOffset,
-      SettingBoxKey.subtitleOffsetEnabled: subtitleOffsetEnabled,
     });
   }
 

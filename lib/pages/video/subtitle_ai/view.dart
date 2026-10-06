@@ -1,5 +1,4 @@
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
-import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
@@ -7,7 +6,9 @@ import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/pages/video/subtitle_ai/segment_actions.dart';
 import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
 
-/// 在线视频页「字幕」标签页内容：展示增量识别出的字幕（逐行滚动、双语）。
+/// 在线视频页「字幕」标签页内容：
+/// - 增量识别出的字幕（逐行滚动、双语）
+/// - 本地导入的字幕（逐行滚动，展示行为与识别字幕一致，不含翻译）
 class SubtitleAiPanel extends StatefulWidget {
   const SubtitleAiPanel({required this.videoDetailController, super.key});
 
@@ -20,113 +21,156 @@ class SubtitleAiPanel extends StatefulWidget {
 class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
   VideoDetailController get ctr => widget.videoDetailController;
 
-  @override
-  void dispose() {
-    super.dispose();
-  }
+  /// 展示来源：true=本地导入字幕，false=识别字幕；null 表示按内容自动选择。
+  bool? _showImported;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final session = ctr.liveSubtitleSession;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
-          child: Row(
-            children: [
-              Expanded(
-                child: Obx(() {
-                  final running = session.running.value;
-                  return FilledButton.tonalIcon(
-                    onPressed: running ? session.stop : session.start,
-                    icon: Icon(running ? Icons.stop : Icons.mic),
-                    label: Text(running ? '停止识别' : '开始识别字幕'),
-                    style: FilledButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  );
-                }),
-              ),
-              IconButton(
-                tooltip: 'AI 字幕设置',
-                icon: const Icon(Icons.settings_outlined, size: 20),
-                onPressed: () => showSubtitleBottomSheet(
-                  context,
-                  playerController: ctr.plPlayerController,
-                  child: AiSubtitleSettingsSheet(videoDetailController: ctr),
+    return Obx(() {
+      final imported = ctr.importedSubtitleSegments;
+      final hasImported = imported.isNotEmpty;
+      final showImported = hasImported && (_showImported ?? true);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Obx(() {
+                    final running = session.running.value;
+                    return FilledButton.tonalIcon(
+                      onPressed: running ? session.stop : session.start,
+                      icon: Icon(running ? Icons.stop : Icons.mic),
+                      label: Text(running ? '停止识别' : '开始识别字幕'),
+                      style: FilledButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    );
+                  }),
                 ),
-              ),
-              IconButton(
-                tooltip: '调试日志',
-                icon: const Icon(Icons.bug_report_outlined, size: 20),
-                onPressed: () => showSubtitleBottomSheet(
-                  context,
-                  playerController: ctr.plPlayerController,
-                  child: const SubtitleDebugLogSheet(),
-                ),
-              ),
-              IconButton(
-                tooltip: '保存为 SRT',
-                icon: const Icon(Icons.save_alt, size: 20),
-                onPressed: session.exportSrt,
-              ),
-            ],
-          ),
-        ),
-        Obx(() {
-          final running = session.running.value;
-          if (running) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                IconButton(
+                  tooltip: 'AI 字幕设置',
+                  icon: const Icon(Icons.settings_outlined, size: 20),
+                  onPressed: () => showSubtitleBottomSheet(
+                    context,
+                    playerController: ctr.plPlayerController,
+                    child: AiSubtitleSettingsSheet(videoDetailController: ctr),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      session.stage.value,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.outline,
+                ),
+                IconButton(
+                  tooltip: '调试日志',
+                  icon: const Icon(Icons.bug_report_outlined, size: 20),
+                  onPressed: () => showSubtitleBottomSheet(
+                    context,
+                    playerController: ctr.plPlayerController,
+                    child: const SubtitleDebugLogSheet(),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '保存为 SRT',
+                  icon: const Icon(Icons.save_alt, size: 20),
+                  onPressed: session.exportSrt,
+                ),
+              ],
+            ),
+          ),
+          Obx(() {
+            final running = session.running.value;
+            if (running) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        session.stage.value,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              );
+            }
+            return const SizedBox.shrink();
+          }),
+          if (hasImported)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: Text('识别字幕 ${session.segments.length}'),
+                    selected: !showImported,
+                    onSelected: (_) => setState(() => _showImported = false),
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: Text('导入字幕 ${imported.length}'),
+                    selected: showImported,
+                    onSelected: (_) => setState(() => _showImported = true),
                   ),
                 ],
               ),
-            );
-          }
-          return const SizedBox.shrink();
-        }),
-        const Divider(height: 12),
-        Expanded(
-          child: _SubtitleList(
-            session: session,
-            playerController: ctr.plPlayerController,
+            ),
+          const Divider(height: 12),
+          Expanded(
+            child: showImported
+                ? _SubtitleList(
+                    segments: imported,
+                    playerController: ctr.plPlayerController,
+                    emptyHint: '导入的字幕会逐行显示在这里',
+                  )
+                : _SubtitleList(
+                    segments: session.segments,
+                    playerController: ctr.plPlayerController,
+                    emptyHint:
+                        '点击「开始识别字幕」后，识别结果会逐行显示在这里\n'
+                        '（边播边识别，中文翻译稍后自动补上）',
+                    onLongPress: (seg) => showSegmentActions(
+                      context,
+                      session: session,
+                      playerController: ctr.plPlayerController,
+                      segment: seg,
+                    ),
+                  ),
           ),
-        ),
-      ],
-    );
+        ],
+      );
+    });
   }
 }
 
 class _SubtitleList extends StatefulWidget {
-  const _SubtitleList({required this.session, required this.playerController});
+  const _SubtitleList({
+    required this.segments,
+    required this.playerController,
+    required this.emptyHint,
+    this.onLongPress,
+  });
 
-  final LiveSubtitleSession session;
+  final RxList<LocalSubtitleSegment> segments;
   final PlPlayerController playerController;
+  final String emptyHint;
+  final void Function(LocalSubtitleSegment segment)? onLongPress;
 
   @override
   State<_SubtitleList> createState() => _SubtitleListState();
 }
 
 class _SubtitleListState extends State<_SubtitleList> {
-  LiveSubtitleSession get session => widget.session;
   PlPlayerController get playerController => widget.playerController;
 
   final ScrollController _scroll = ScrollController();
@@ -138,6 +182,17 @@ class _SubtitleListState extends State<_SubtitleList> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScrollChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SubtitleList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 在「识别字幕」与「导入字幕」之间切换时列表实例不同，重置跟随状态。
+    if (!identical(oldWidget.segments, widget.segments)) {
+      _rowKeys.clear();
+      _lastActive = -1;
+      _follow = true;
+    }
   }
 
   void _onScrollChanged() {
@@ -191,14 +246,13 @@ class _SubtitleListState extends State<_SubtitleList> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Obx(() {
-      final segments = session.segments.toList();
+      final segments = widget.segments.toList();
       if (segments.isEmpty) {
         return Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text(
-              '点击「开始识别字幕」后，识别结果会逐行显示在这里\n'
-              '（边播边识别，中文翻译稍后自动补上）',
+              widget.emptyHint,
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.outline,
@@ -208,10 +262,14 @@ class _SubtitleListState extends State<_SubtitleList> {
         );
       }
       final currentPos = playerController.position.value;
+      // 字幕时间偏移开启时视频上的字幕会整体顺延，逐句高亮需同步偏移。
+      final delay = playerController.subtitleOffsetEnabled
+          ? playerController.subtitleOffset
+          : 0.0;
       int active = segments.length - 1;
       for (var i = 0; i < segments.length; i++) {
-        if (currentPos >= segments[i].from &&
-            currentPos <= segments[i].to + 1) {
+        if (currentPos >= segments[i].from + delay &&
+            currentPos <= segments[i].to + delay + 1) {
           active = i;
           break;
         }
@@ -235,7 +293,7 @@ class _SubtitleListState extends State<_SubtitleList> {
           itemBuilder: (context, index) {
             final seg = segments[index];
             final isActive = index == active;
-            final isPassed = currentPos > seg.to + 1;
+            final isPassed = currentPos > seg.to + delay + 1;
             return AnimatedOpacity(
               key: _rowKeys.putIfAbsent(index, GlobalKey.new),
               duration: const Duration(milliseconds: 200),
@@ -243,12 +301,9 @@ class _SubtitleListState extends State<_SubtitleList> {
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
                 onTap: () => _onTapSegment(seg.from.toInt()),
-                onLongPress: () => showSegmentActions(
-                  context,
-                  session: session,
-                  playerController: playerController,
-                  segment: seg,
-                ),
+                onLongPress: widget.onLongPress == null
+                    ? null
+                    : () => widget.onLongPress!(seg),
                 child: Container(
                   margin: const EdgeInsets.symmetric(
                     horizontal: 12,

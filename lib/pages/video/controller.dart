@@ -64,6 +64,7 @@ import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
+import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
@@ -1046,6 +1047,10 @@ class VideoDetailController extends GetxController
   RxList<Subtitle> subtitles = RxList<Subtitle>();
   final Map<int, ({bool isData, String id})> vttSubtitles = {};
 
+  /// 最近一次从本地文件导入的字幕分段（供竖屏字幕页逐句展示，不含翻译）。
+  final RxList<LocalSubtitleSegment> importedSubtitleSegments =
+      <LocalSubtitleSegment>[].obs;
+
   LiveSubtitleSession? _liveSubtitleSession;
 
   /// 增量字幕识别会话（懒创建，跨竖屏字幕页/横屏设置共享）
@@ -1078,6 +1083,8 @@ class VideoDetailController extends GetxController
       await plPlayerController.videoPlayerController?.setSubtitleTrack(
         SubtitleTrack(subUri, sub.lanDoc, sub.lan, uri: true),
       );
+      // 新轨道可能重置 per-file 的 sub-delay，切换后按当前设置重新应用。
+      plPlayerController.applySubtitleDelay();
       vttSubtitlesIndex.value = index;
     }
 
@@ -1136,29 +1143,71 @@ class VideoDetailController extends GetxController
       final path = file.path;
       final name = file.name;
       final length = subtitles.length;
+      List<LocalSubtitleSegment> segments = const [];
       if (name.endsWith('.json') || name.endsWith('.bcc')) {
         final stream = File(path).openRead().transform(utf8.decoder);
         final buffer = StringBuffer();
         await for (final chunk in stream) {
           buffer.write(chunk);
         }
-        final sub = await compute<List, String>(
-          SubtitleUtils.json2Vtt,
-          jsonDecode(buffer.toString())['body'],
-        );
+        final body = jsonDecode(buffer.toString())['body'];
+        final sub = await compute<List, String>(SubtitleUtils.json2Vtt, body);
         vttSubtitles[length] = (isData: true, id: sub);
-      } else if (name.endsWith('.vtt')) {
-        vttSubtitles[length] = (isData: false, id: path);
+        segments = _cuesToSegments(body);
       } else {
         vttSubtitles[length] = (isData: false, id: path);
+        if (name.endsWith('.vtt') || name.endsWith('.srt')) {
+          final text = await File(path).readAsString();
+          segments = _cuesToSegments(SubtitleUtils.parseCues(text));
+        }
       }
       subtitles.add(
         Subtitle(lan: '', lanDoc: name.split('.').firstOrNull ?? name),
       );
+      importedSubtitleSegments.assignAll(segments);
+      // 新导入的字幕应按文件自身时间轴显示：清零上一次残留的时间偏移，
+      // 避免导入字幕后整体提前/延后。
+      plPlayerController
+        ..subtitleOffset = 0
+        ..subtitleOffsetEnabled = false
+        ..applySubtitleDelay();
       await setSubtitle(length + 1);
+      SmartDialog.showToast(
+        segments.isEmpty
+            ? '已导入字幕：$name'
+            : '已导入字幕：$name（共 ${segments.length} 句）',
+      );
     } catch (e) {
       SmartDialog.showToast('加载失败: $e');
     }
+  }
+
+  /// 将 `{from, to, content}` 形式的解析结果转换为字幕分段。
+  static List<LocalSubtitleSegment> _cuesToSegments(List cues) {
+    final segments = <LocalSubtitleSegment>[];
+    for (final cue in cues) {
+      if (cue is! Map) {
+        continue;
+      }
+      final from = cue['from'];
+      final to = cue['to'];
+      final content = cue['content'];
+      if (from is! num || to is! num || content is! String) {
+        continue;
+      }
+      final text = content.trim();
+      if (text.isEmpty) {
+        continue;
+      }
+      segments.add(
+        LocalSubtitleSegment(
+          from: from.toDouble(),
+          to: to.toDouble(),
+          text: text,
+        ),
+      );
+    }
+    return segments;
   }
 
   // interactive video
@@ -1345,6 +1394,7 @@ class VideoDetailController extends GetxController
       ?..removeListener(_animListener)
       ..dispose();
     subtitles.clear();
+    importedSubtitleSegments.clear();
     vttSubtitles.clear();
     _liveSubtitleSession?.shutdown();
     _liveSubtitleSession = null;
@@ -1366,8 +1416,15 @@ class VideoDetailController extends GetxController
 
     // subtitle
     subtitles.clear();
+    importedSubtitleSegments.clear();
     vttSubtitlesIndex.value = -1;
     vttSubtitles.clear();
+    // 切换视频后重置字幕时间偏移：上一段视频的偏移对新视频没有意义，
+    // 保留会导致新视频字幕整体错位。
+    plPlayerController
+      ..subtitleOffset = 0
+      ..subtitleOffsetEnabled = false
+      ..applySubtitleDelay();
 
     if (!isFileSource) {
       // language

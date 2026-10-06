@@ -435,14 +435,6 @@ abstract final class Pref {
   static int get subtitleFontWeight =>
       _setting.get(SettingBoxKey.subtitleFontWeight, defaultValue: 5);
 
-  /// 字幕时间偏移（秒）。正值表示字幕延后出现，负值表示提前。
-  static double get subtitleOffset =>
-      _setting.get(SettingBoxKey.subtitleOffset, defaultValue: 0.0);
-
-  /// 是否启用字幕时间偏移。
-  static bool get subtitleOffsetEnabled =>
-      _setting.get(SettingBoxKey.subtitleOffsetEnabled, defaultValue: false);
-
   static bool get badCertificateCallback =>
       _setting.get(SettingBoxKey.badCertificateCallback, defaultValue: false);
 
