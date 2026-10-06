@@ -439,6 +439,10 @@ abstract final class Pref {
   static double get subtitleOffset =>
       _setting.get(SettingBoxKey.subtitleOffset, defaultValue: 0.0);
 
+  /// 是否启用字幕时间偏移。
+  static bool get subtitleOffsetEnabled =>
+      _setting.get(SettingBoxKey.subtitleOffsetEnabled, defaultValue: false);
+
   static bool get badCertificateCallback =>
       _setting.get(SettingBoxKey.badCertificateCallback, defaultValue: false);
 

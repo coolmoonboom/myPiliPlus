@@ -332,6 +332,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 字幕时间偏移（秒）。正值字幕延后出现，负值提前。
   late double subtitleOffset = Pref.subtitleOffset;
 
+  /// 是否启用字幕时间偏移。
+  late bool subtitleOffsetEnabled = Pref.subtitleOffsetEnabled;
+
   // settings
   late final showFSActionItem = Pref.showFSActionItem;
   late final enableShrinkVideoSize = Pref.enableShrinkVideoSize;
@@ -443,12 +446,12 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     subtitleConfig.value = getSubConfig;
   }
 
-  /// 将 [subtitleOffset] 应用到 mpv 的 `sub-delay` 属性（单位秒）。
-  /// 该属性对当前及后续所有字幕轨（含导入字幕、AI 字幕）生效。
+  /// 将字幕时间偏移应用到 mpv 的 `sub-delay` 属性（单位秒）；
+  /// 未启用时重置为 0。对当前及后续所有字幕轨（含导入字幕、AI 字幕）生效。
   void applySubtitleDelay() {
     _videoPlayerController?.setProperty(
       'sub-delay',
-      subtitleOffset.toStringAsFixed(3),
+      (subtitleOffsetEnabled ? subtitleOffset : 0).toStringAsFixed(3),
     );
   }
 
@@ -1656,6 +1659,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       SettingBoxKey.subtitleStrokeWidth: subtitleStrokeWidth,
       SettingBoxKey.subtitleFontWeight: subtitleFontWeight,
       SettingBoxKey.subtitleOffset: subtitleOffset,
+      SettingBoxKey.subtitleOffsetEnabled: subtitleOffsetEnabled,
     });
   }
 
