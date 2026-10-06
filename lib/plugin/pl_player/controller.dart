@@ -329,6 +329,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   late double subtitleStrokeWidth = Pref.subtitleStrokeWidth;
   late int subtitleFontWeight = Pref.subtitleFontWeight;
 
+  /// 字幕时间偏移（秒）。正值字幕延后出现，负值提前。
+  late double subtitleOffset = Pref.subtitleOffset;
+
   // settings
   late final showFSActionItem = Pref.showFSActionItem;
   late final enableShrinkVideoSize = Pref.enableShrinkVideoSize;
@@ -438,6 +441,15 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   void updateSubtitleStyle() {
     subtitleConfig.value = getSubConfig;
+  }
+
+  /// 将 [subtitleOffset] 应用到 mpv 的 `sub-delay` 属性（单位秒）。
+  /// 该属性对当前及后续所有字幕轨（含导入字幕、AI 字幕）生效。
+  void applySubtitleDelay() {
+    _videoPlayerController?.setProperty(
+      'sub-delay',
+      subtitleOffset.toStringAsFixed(3),
+    );
   }
 
   void onUpdatePadding(EdgeInsets padding) {
@@ -843,6 +855,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       ),
       play: false,
     );
+    // sub-delay 是 per-file 选项，打开新文件后会重置，需在 open 之后重新应用。
+    applySubtitleDelay();
   }
 
   Future<void>? refreshPlayer() {
@@ -852,7 +866,10 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (_videoPlayerController case final ctr? when (ctr.current.isNotEmpty)) {
       var media = ctr.current.last;
       if (!isLive) media = media.copyWith(start: ctr.state.position);
-      return ctr.open(media, play: true);
+      // 重新打开文件会重置 per-file 的 sub-delay，完成后重新应用字幕偏移。
+      return ctr.open(media, play: true).whenComplete(() {
+        applySubtitleDelay();
+      });
     }
     return null;
   }
@@ -1638,6 +1655,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       SettingBoxKey.subtitleBgOpacity: subtitleBgOpacity,
       SettingBoxKey.subtitleStrokeWidth: subtitleStrokeWidth,
       SettingBoxKey.subtitleFontWeight: subtitleFontWeight,
+      SettingBoxKey.subtitleOffset: subtitleOffset,
     });
   }
 

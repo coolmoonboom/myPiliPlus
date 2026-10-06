@@ -1305,6 +1305,19 @@ class HeaderControlState extends State<HeaderControl>
   double get subtitleBgOpacity => plPlayerController.subtitleBgOpacity;
   double get subtitleStrokeWidth => plPlayerController.subtitleStrokeWidth;
   int get subtitleFontWeight => plPlayerController.subtitleFontWeight;
+  double get subtitleOffset => plPlayerController.subtitleOffset;
+
+  /// 将秒数格式化为「延后 01:30 / 提前 00:30」形式的可读文案。
+  String _formatSubtitleOffset(double seconds) {
+    if (seconds == 0) {
+      return '无偏移';
+    }
+    final abs = seconds.abs().round();
+    final mmss =
+        '${(abs ~/ 60).toString().padLeft(2, '0')}:'
+        '${(abs % 60).toString().padLeft(2, '0')}';
+    return seconds > 0 ? '延后 $mmss' : '提前 $mmss';
+  }
 
   /// 字幕设置
   void showSetSubtitle() {
@@ -1371,6 +1384,13 @@ class HeaderControlState extends State<HeaderControl>
           plPlayerController
             ..subtitleFontWeight = val.toInt()
             ..updateSubtitleStyle();
+          setState(() {});
+        }
+
+        void updateOffset(double val) {
+          plPlayerController
+            ..subtitleOffset = val.toPrecision(1)
+            ..applySubtitleDelay();
           setState(() {});
         }
 
@@ -1523,6 +1543,24 @@ class HeaderControlState extends State<HeaderControl>
                         divisions: 100,
                         value: subtitleBgOpacity,
                         onChanged: updateOpacity,
+                      ),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('字幕时间偏移 ${_formatSubtitleOffset(subtitleOffset)}'),
+                        resetBtn(theme, 0, () => updateOffset(0)),
+                      ],
+                    ),
+                    Padding(
+                      padding: sliderPadding,
+                      child: Slider(
+                        min: -600,
+                        max: 600,
+                        divisions: 1200,
+                        value: subtitleOffset.clamp(-600, 600).toDouble(),
+                        label: _formatSubtitleOffset(subtitleOffset),
+                        onChanged: updateOffset,
                       ),
                     ),
                   ],
