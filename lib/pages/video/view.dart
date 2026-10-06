@@ -188,6 +188,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   void positionListener(Duration position) {
     videoDetailController.playedTime = position;
+    videoDetailController.maybePersistSubtitleArchive(position.inSeconds);
   }
 
   @override
@@ -202,6 +203,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     } else if (state == .paused) {
       introController.cancelTimer();
       ctr.showDanmaku = false;
+      videoDetailController.persistSubtitleArchive();
     }
   }
 
@@ -356,6 +358,8 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
     if (!videoDetailController.plPlayerController.isCloseAll) {
       videoPlayerServiceHandler?.onVideoDetailDispose(heroTag);
+      // 离开页面即落盘字幕存档（不依赖 GetX onClose）。
+      videoDetailController.persistSubtitleArchive();
       if (plPlayerController != null) {
         videoDetailController.makeHeartBeat();
         plPlayerController!.dispose();

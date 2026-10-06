@@ -1055,6 +1055,9 @@ class VideoDetailController extends GetxController
   final RxList<LocalSubtitleSegment> importedSubtitleSegments =
       <LocalSubtitleSegment>[].obs;
 
+  /// 导入字幕在播放器中的轨道号（1 起始）；-1 表示无。
+  int _importedSubtitleTrackIndex = -1;
+
   LiveSubtitleSession? _liveSubtitleSession;
 
   /// 增量字幕识别会话（懒创建，跨竖屏字幕页/横屏设置共享）
@@ -1195,6 +1198,7 @@ class VideoDetailController extends GetxController
         ..subtitleOffsetEnabled = false
         ..applySubtitleDelay();
       await setSubtitle(length + 1);
+      _importedSubtitleTrackIndex = length + 1;
       SmartDialog.showToast(
         segments.isEmpty
             ? '已导入字幕：$name'
@@ -1324,6 +1328,29 @@ class VideoDetailController extends GetxController
     await SubtitleArchiveStore.saveToCache(archive);
   }
 
+  /// 立即把当前字幕存档写入应用内缓存。
+  ///
+  /// 供「离开页面 / 切到后台 / 面板关闭」等确定的生命周期调用；
+  /// 不依赖 GetX 的 onClose（该控制器用 Get.put 创建，onClose 不一定触发）。
+  void persistSubtitleArchive() {
+    final archive = buildSubtitleArchive();
+    if (archive == null) {
+      return;
+    }
+    unawaited(SubtitleArchiveStore.saveToCache(archive));
+  }
+
+  int _lastArchivePersistSecond = -100000;
+
+  /// 播放中每约 10 秒落盘一次，确保进度、偏移、样式及时写入缓存。
+  void maybePersistSubtitleArchive(int positionSeconds) {
+    if (positionSeconds - _lastArchivePersistSecond < 10) {
+      return;
+    }
+    _lastArchivePersistSecond = positionSeconds;
+    persistSubtitleArchive();
+  }
+
   /// 打开视频后按 bvid+cid 自动加载缓存存档（每个播放会话只尝试一次）。
   Future<void> _maybeRestoreSubtitleArchive() async {
     if (_subtitleArchiveRestored) {
@@ -1392,6 +1419,41 @@ class VideoDetailController extends GetxController
     if (activate) {
       await setSubtitle(length + 1);
     }
+    _importedSubtitleTrackIndex = length + 1;
+  }
+
+  /// 修改一条导入字幕的原文/译文，并刷新其在播放器中的字幕轨。
+  Future<void> updateImportedSegment(
+    LocalSubtitleSegment segment, {
+    required String text,
+    String? translated,
+  }) async {
+    final list = importedSubtitleSegments;
+    final i = list.indexWhere(
+      (e) => e.from == segment.from && e.to == segment.to,
+    );
+    if (i < 0) {
+      return;
+    }
+    list[i] = LocalSubtitleSegment(
+      from: segment.from,
+      to: segment.to,
+      text: text,
+      translated: translated,
+    );
+    list.refresh();
+    final idx = _importedSubtitleTrackIndex;
+    if (idx <= 0 || idx - 1 >= subtitles.length) {
+      return;
+    }
+    vttSubtitles[idx - 1] = (
+      isData: true,
+      id: LocalSubtitleService.buildVtt(list.toList()),
+    );
+    if (vttSubtitlesIndex.value == idx) {
+      await setSubtitle(idx);
+    }
+    unawaited(_saveSubtitleArchiveCache());
   }
 
   // interactive video
@@ -1569,10 +1631,7 @@ class VideoDetailController extends GetxController
   @override
   void onClose() {
     // 离开视频时把字幕/偏移/样式/进度存档，供下次自动加载
-    final archive = buildSubtitleArchive();
-    if (archive != null) {
-      unawaited(SubtitleArchiveStore.saveToCache(archive));
-    }
+    persistSubtitleArchive();
     cid.close();
     if (isFileSource) {
       cacheLocalProgress();
@@ -1586,6 +1645,7 @@ class VideoDetailController extends GetxController
       ..dispose();
     subtitles.clear();
     importedSubtitleSegments.clear();
+    _importedSubtitleTrackIndex = -1;
     vttSubtitles.clear();
     _liveSubtitleSession?.shutdown();
     _liveSubtitleSession = null;
@@ -1608,6 +1668,7 @@ class VideoDetailController extends GetxController
     // subtitle
     subtitles.clear();
     importedSubtitleSegments.clear();
+    _importedSubtitleTrackIndex = -1;
     vttSubtitlesIndex.value = -1;
     vttSubtitles.clear();
     // 切换视频后重置字幕时间偏移：上一段视频的偏移对新视频没有意义，

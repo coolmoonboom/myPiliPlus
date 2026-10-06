@@ -131,6 +131,16 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
                     segments: imported,
                     playerController: ctr.plPlayerController,
                     emptyHint: '导入的字幕会逐行显示在这里',
+                    onLongPress: (seg) => showSegmentActions(
+                      context,
+                      playerController: ctr.plPlayerController,
+                      segment: seg,
+                      onEdit: (text, translated) => ctr.updateImportedSegment(
+                        seg,
+                        text: text,
+                        translated: translated,
+                      ),
+                    ),
                   )
                 : _SubtitleList(
                     segments: session.segments,
@@ -140,9 +150,16 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
                         '（边播边识别，中文翻译稍后自动补上）',
                     onLongPress: (seg) => showSegmentActions(
                       context,
-                      session: session,
                       playerController: ctr.plPlayerController,
                       segment: seg,
+                      onEdit: (text, translated) => Future.sync(
+                        () => session.updateSegment(
+                          from: seg.from,
+                          to: seg.to,
+                          text: text,
+                          translated: translated,
+                        ),
+                      ),
                     ),
                   ),
           ),
@@ -176,6 +193,7 @@ class _SubtitleListState extends State<_SubtitleList> {
   final Map<int, GlobalKey> _rowKeys = {};
   int _lastActive = -2;
   bool _hasPositioned = false;
+  bool _wasDragging = false;
 
   @override
   void didUpdateWidget(covariant _SubtitleList oldWidget) {
@@ -199,6 +217,10 @@ class _SubtitleListState extends State<_SubtitleList> {
   /// 列表按需构建，远距离的目标行可能尚未生成（拿不到 context），
   /// 此时先按平均行高估算位置跳过去，下一帧目标行生成后再精确居中。
   void _maybeFollow(int active) {
+    // 拖动「精细调控」滑块时暂停跟随，松手 2 秒后才恢复（见 begin/endSubtitleOffsetDrag）。
+    if (playerController.subtitleOffsetDragging) {
+      return;
+    }
     if (active < 0 || active == _lastActive) {
       return;
     }
@@ -282,6 +304,13 @@ class _SubtitleListState extends State<_SubtitleList> {
       if (segments.length < _rowKeys.length) {
         _rowKeys.removeWhere((k, _) => k >= segments.length);
       }
+      // 读取拖动状态会订阅该 Rx：松手满 2 秒后其翻转会触发本 Obx 重建。
+      final dragging = playerController.subtitleOffsetDragging;
+      if (_wasDragging && !dragging) {
+        // 恢复跟随时强制重新定位到当前句。
+        _lastActive = -2;
+      }
+      _wasDragging = dragging;
       _maybeFollow(active);
       return ListView.builder(
         controller: _scroll,

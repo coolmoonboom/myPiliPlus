@@ -63,6 +63,13 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
   );
 
   @override
+  void dispose() {
+    // 关闭设置面板即落盘（偏移/样式改完常在此刻），避免退出视频时丢设置。
+    widget.videoDetailController.persistSubtitleArchive();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
@@ -533,6 +540,8 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
             value: fineMs.clamp(-maxMs.toDouble(), maxMs.toDouble()).toDouble(),
             label: _format(fineMs / 1000),
             onChanged: _updateFromSlider,
+            onChangeStart: (_) => pc.beginSubtitleOffsetDrag(),
+            onChangeEnd: (_) => pc.endSubtitleOffsetDrag(),
           ),
           Text(
             '先用「时/分/秒/毫秒」设置基准偏移，再拖动上方滑块按毫秒叠加微调。',

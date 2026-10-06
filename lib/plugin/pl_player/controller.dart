@@ -383,6 +383,31 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   set subtitleOffsetEnabled(bool value) => _subtitleOffsetEnabled.value = value;
 
+  /// 「精细调控」滑块是否正在被拖动。
+  ///
+  /// 拖动期间暂停「每句字幕」列表的歌词式跟随，松手 2 秒后再恢复，
+  /// 避免滑块一动列表就跟着乱跳。
+  final RxBool _subtitleOffsetDragging = false.obs;
+
+  Timer? _subtitleOffsetDragTimer;
+
+  bool get subtitleOffsetDragging => _subtitleOffsetDragging.value;
+
+  /// 滑块开始拖动：暂停列表跟随。
+  void beginSubtitleOffsetDrag() {
+    _subtitleOffsetDragTimer?.cancel();
+    _subtitleOffsetDragTimer = null;
+    _subtitleOffsetDragging.value = true;
+  }
+
+  /// 滑块松手：等待 2 秒后恢复列表跟随。
+  void endSubtitleOffsetDrag() {
+    _subtitleOffsetDragTimer?.cancel();
+    _subtitleOffsetDragTimer = Timer(const Duration(seconds: 2), () {
+      _subtitleOffsetDragging.value = false;
+    });
+  }
+
   // settings
   late final showFSActionItem = Pref.showFSActionItem;
   late final enableShrinkVideoSize = Pref.enableShrinkVideoSize;
@@ -1793,6 +1818,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       AndroidHelper$ToDart.onUserLeaveHint = null;
     }
     _timer?.cancel();
+    _subtitleOffsetDragTimer?.cancel();
     // _position.close();
     // _playerEventSubs?.cancel();
     // _sliderPosition.close();

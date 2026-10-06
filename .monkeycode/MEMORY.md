@@ -40,6 +40,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - build.yml 的 android job 在 workflow_dispatch 且 tag 非空时，自动用 softprops/action-gh-release 创建 Release 并上传三个 ABI 的 APK。
   - 未配置 SIGN_KEYSTORE_BASE64 等 secrets 时，release APK 回退 debug 签名（android/app/build.gradle.kts 中 signingConfig = config ?: signingConfigs["debug"]），可安装但非正式发布签名。
   - 版本号由 lib/scripts/build.ps1 基于 commit 数自动生成，pubspec 的 version 仅作前缀。
+  - git push 到 GitHub 偶发 `RPC failed; HTTP 408` / `send-pack: unexpected disconnect`，重试仍失败时加 `git -c http.version=HTTP/1.1 -c http.postBuffer=52428800 push <url> main` 可成功（勿写坏本地 git config）。
 
 [CI Android 构建的已知坑]
 - Date: 2026-09-30
@@ -56,8 +57,8 @@ Entries discovered by the Agent during task execution should follow this format:
 - Category: Environment Configuration
 - Instructions:
   - 本环境无 Flutter/Android SDK，无法完整编译；只能做语法级校验。
-  - 代码大量使用 dot-shorthands（`.paused` 等枚举简写），stable Dart 3.9.x 无法解析；需要 dev 渠道 3.14 SDK，已安装于 /opt/dart314/dart-sdk/bin/dart。
-  - 语法校验命令：`/opt/dart314/dart-sdk/bin/dart format --output=none <file>`；注意它只解析语法，不检查符号/导入，UI 文件仍需人工核对 material 导入。
+  - 代码大量使用 dot-shorthands（`.paused` 等枚举简写），stable Dart 3.9.x 无法解析；需要 dev 渠道 3.14 SDK。dev SDK 非常驻（/opt/dart314 已失效），需要时从 `https://storage.googleapis.com/dart-archive/channels/dev/release/<ver>/sdk/dartsdk-linux-x64-release.zip` 下载解压到 /tmp。
+  - 语法校验命令：`<dart-sdk>/bin/dart format --output=none <file>`；注意它只解析语法，不检查符号/导入，UI 文件仍需人工核对 material 导入。
   - pubspec.yaml 固定 flutter: 3.47.5、sdk >=3.13.0，CI 的 subosito/flutter-action 通过 flutter-version-file 读取。
 
 [Release 2.2.1 发布经验]
@@ -124,7 +125,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - 本项目 Django/混合 Dart 代码里 `if (a is Map && a['k'] case final Map v)` 这类「case 模式紧跟 && 」的写法在运行时会抛 TypeError：`case` 模式作用于整个 if 条件（含前面整个 `&&` 链），导致先求值 `a is Map && a['k']`，右侧是 Map 而非 bool，直接抛 `type 'Map' is not a subtype of type 'bool'`。任何加括号 `(x case P)` 在表达式位置也无法编译。
   - `expr case P` 只有作为 if/while 条件的**唯一/末尾**守卫时才安全（如 `if (foo() case final x?)`）；一旦前面还有 `&&`，就不要用 case 模式。
   - 修法：改为嵌套 `if (a is Map) { final v = a['k']; if (v is Map) {...} }`，不用 case 模式。
-  - 排查时可用 `/opt/dart314/dart-sdk/bin/dart` 写最小复现脚本确认行为。
+  - 排查时可用 dev dart SDK 写最小复现脚本确认行为。
 
 [material_ui 与 flutter/material 禁止混导]
 - Date: 2026-10-03
@@ -133,16 +134,19 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 本项目 UI 层只允许 `package:material_ui/material_ui.dart`（它 export flutter/widgets.dart 并重定义 Theme/Icons/Colors/FilledButton 等）；任何文件再显式 import 'package:flutter/material.dart' 会引发大量 "imported from both" 编译错误。
   - 缺符号（如 ScrollDirection/UserScrollNotification）时优先用 material_ui 已导出的 widgets 符号 + Dart 3 枚举简写（`n.direction != .idle`、`position.userScrollDirection == .forward`），参考 lib/pages/live_room/controller.dart；确有文件同时导两者时须逐个 hide 冲突符号，避免。
-[dart:io 编译陷阱：无 RandomAccessFile.open]
+[Dart SDK 差异与编译陷阱汇总（dart:io / 级联+lambda）]
 - Date: 2026-10-03
-- Context: CI 编译失败（Member not found: 'RandomAccessFile.open'）
+- Context: Discovered by Agent while 修复 CI 编译失败（RandomAccessFile.open；级联+lambda）
 - Category: Troubleshooting & Debugging
 - Instructions:
   - 本项目 Flutter SDK 的 dart:io 没有 `RandomAccessFile.open(...)` 静态方法，随机读文件要用 `File(path).openSync()`（返回 RandomAccessFile，默认 read 模式）；本地无 flutter 环境时本地 dart 分析发现不了这类 SDK 差异，最终以 CI 为准。
-[Dart 级联与 arrow-lambda 混合的编译陷阱]
-- Date: 2026-10-03
-- Context: CI 报 "The setter 'releaseModelOnExit' isn't defined for the type 'int'"
-- Category: Troubleshooting & Debugging
-- Instructions:
   - 写法 `..prop = () => expr..other = v` 会把第二个级联吞进 lambda 返回值上，dart format 与本地无包分析均不报错，只有 CI 编译暴露。级联里含函数字面量时，函数赋值单独成行。
   - Release 资产 label 含中文长文本可能被拒（4-byte Unicode）；用 ASCII label 稳妥。
+
+[Get.put 控制器 onClose 不保证触发，持久化须挂确定生命周期]
+- Date: 2026-10-06
+- Context: Discovered by Agent while 定位「字幕存档退出视频后丢失」
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - VideoDetailController 用 `Get.put(VideoDetailController(), tag: heroTag)` 创建（无 binding），页面退出时 GetX 不保证调用其 onClose，只在 onClose 落盘会丢数据。
+  - 需要持久化的状态应在确定执行的生命周期落盘：View 的 dispose()、didChangeAppLifecycleState 的 paused、子面板 dispose()，以及播放中按节流间隔（positionListener 每约 10s）。
