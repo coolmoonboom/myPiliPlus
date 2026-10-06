@@ -293,13 +293,17 @@ class _SubtitleListState extends State<_SubtitleList> {
             final seg = segments[index];
             final isActive = index == active;
             final isPassed = currentPos > seg.to + delay + 1;
+            // 字幕叠加偏移后实际出现的时间点：延后（delay>0）则加，提前则减。
+            final shiftedFrom = (seg.from + delay)
+                .clamp(0, double.infinity)
+                .toDouble();
             return AnimatedOpacity(
               key: _rowKeys.putIfAbsent(index, GlobalKey.new),
               duration: const Duration(milliseconds: 200),
               opacity: isPassed && !isActive ? 0.45 : 1,
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: () => _onTapSegment(seg.from.toInt()),
+                onTap: () => _onTapSegment(shiftedFrom.toInt()),
                 onLongPress: widget.onLongPress == null
                     ? null
                     : () => widget.onLongPress!(seg),
@@ -323,6 +327,13 @@ class _SubtitleListState extends State<_SubtitleList> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        _fmtClock(shiftedFrom),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
                       Text(
                         seg.text,
                         style: theme.textTheme.bodyMedium?.copyWith(
@@ -354,4 +365,12 @@ class _SubtitleListState extends State<_SubtitleList> {
       );
     });
   }
+}
+
+/// 把秒数格式化为「分:秒」，用于字幕列表逐句时间展示。
+String _fmtClock(double seconds) {
+  final total = seconds < 0 ? 0 : seconds.toInt();
+  final m = total ~/ 60;
+  final s = total % 60;
+  return '$m:${s.toString().padLeft(2, '0')}';
 }
