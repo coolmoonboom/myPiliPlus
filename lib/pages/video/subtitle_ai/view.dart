@@ -54,21 +54,20 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
                   }),
                 ),
                 IconButton(
+                  tooltip: '导入本地字幕文件',
+                  icon: const Icon(Icons.upload_file_outlined, size: 20),
+                  onPressed: () => ctr.importSubtitleFile(context),
+                ),
+                IconButton(
                   tooltip: 'AI 字幕设置',
-                  icon: const Icon(Icons.settings_outlined, size: 20),
+                  icon: const Text(
+                    'AI',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
                   onPressed: () => showSubtitleBottomSheet(
                     context,
                     playerController: ctr.plPlayerController,
                     child: AiSubtitleSettingsSheet(videoDetailController: ctr),
-                  ),
-                ),
-                IconButton(
-                  tooltip: '调试日志',
-                  icon: const Icon(Icons.bug_report_outlined, size: 20),
-                  onPressed: () => showSubtitleBottomSheet(
-                    context,
-                    playerController: ctr.plPlayerController,
-                    child: const SubtitleDebugLogSheet(),
                   ),
                 ),
                 IconButton(

@@ -118,16 +118,11 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
                 },
               ),
               const Divider(height: 28),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.upload_file_outlined, size: 20),
-                title: const Text('导入本地字幕文件'),
-                subtitle: const Text(
-                  '支持 .srt / .vtt，导入后立即在播放器显示，并可在字幕页逐句查看',
-                ),
-                onTap: () =>
-                    widget.videoDetailController.importSubtitleFile(context),
+              SubtitleOffsetSettings(
+                playerController:
+                    widget.videoDetailController.plPlayerController,
               ),
+              const Divider(height: 28),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.translate_outlined, size: 20),
@@ -361,6 +356,206 @@ class _ModelSelectorState extends State<ModelSelector> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 字幕时间偏移设置：开关 + 偏移方向 + 时/分/秒/毫秒输入 + 毫秒级精细调控滑块。
+///
+/// 由播放器「字幕设置」面板与「AI 字幕设置」面板共用，两处修改实时同步。
+class SubtitleOffsetSettings extends StatefulWidget {
+  const SubtitleOffsetSettings({required this.playerController, super.key});
+
+  final PlPlayerController playerController;
+
+  /// 精细调控滑块的毫秒范围（前后各 10 分钟）。
+  static const int maxMilliseconds = 600000;
+
+  @override
+  State<SubtitleOffsetSettings> createState() => _SubtitleOffsetSettingsState();
+}
+
+class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
+  PlPlayerController get pc => widget.playerController;
+
+  late final TextEditingController _hour = TextEditingController();
+  late final TextEditingController _minute = TextEditingController();
+  late final TextEditingController _second = TextEditingController();
+  late final TextEditingController _milli = TextEditingController();
+  late bool _later;
+
+  @override
+  void initState() {
+    super.initState();
+    _later = pc.subtitleOffset >= 0;
+    _syncFields(pc.subtitleOffset);
+  }
+
+  @override
+  void dispose() {
+    _hour.dispose();
+    _minute.dispose();
+    _second.dispose();
+    _milli.dispose();
+    super.dispose();
+  }
+
+  /// 将偏移值回填到「时/分/秒/毫秒」输入框。
+  void _syncFields(double seconds) {
+    final totalMs = (seconds.abs() * 1000).round();
+    _hour.text = totalMs ~/ 3600000 == 0 ? '' : '${totalMs ~/ 3600000}';
+    _minute.text = (totalMs % 3600000) ~/ 60000 == 0
+        ? ''
+        : '${(totalMs % 3600000) ~/ 60000}';
+    _second.text = (totalMs % 60000) ~/ 1000 == 0
+        ? ''
+        : '${(totalMs % 60000) ~/ 1000}';
+    _milli.text = totalMs % 1000 == 0 ? '' : '${totalMs % 1000}';
+  }
+
+  void _apply(double seconds) {
+    pc
+      ..subtitleOffset = seconds
+      ..subtitleOffsetEnabled = true
+      ..applySubtitleDelay();
+  }
+
+  void _updateFromFields() {
+    final h = int.tryParse(_hour.text.trim()) ?? 0;
+    final m = int.tryParse(_minute.text.trim()) ?? 0;
+    final s = int.tryParse(_second.text.trim()) ?? 0;
+    final ms = int.tryParse(_milli.text.trim()) ?? 0;
+    final totalMs = h * 3600000 + m * 60000 + s * 1000 + ms;
+    _apply((_later ? totalMs : -totalMs) / 1000.0);
+    setState(() {});
+  }
+
+  void _updateFromSlider(double milliseconds) {
+    final rounded = milliseconds.roundToDouble();
+    _later = rounded >= 0;
+    _apply(rounded / 1000.0);
+    _syncFields(rounded / 1000.0);
+    setState(() {});
+  }
+
+  String _format(double seconds) {
+    final totalMs = (seconds.abs() * 1000).round();
+    final parts = <String>[
+      if (totalMs ~/ 3600000 > 0) '${totalMs ~/ 3600000} 时',
+      if ((totalMs % 3600000) ~/ 60000 > 0) '${(totalMs % 3600000) ~/ 60000} 分',
+      if ((totalMs % 60000) ~/ 1000 > 0) '${(totalMs % 60000) ~/ 1000} 秒',
+      if (totalMs % 1000 > 0) '${totalMs % 1000} 毫秒',
+    ];
+    final duration = parts.isEmpty ? '0 毫秒' : parts.join(' ');
+    return '${seconds >= 0 ? '延后' : '提前'} $duration';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final enabled = pc.subtitleOffsetEnabled;
+    final offset = pc.subtitleOffset;
+    const maxMs = SubtitleOffsetSettings.maxMilliseconds;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('字幕时间偏移'),
+          subtitle: Text(
+            enabled ? '当前：${_format(offset)}' : '开启后可将字幕整体提前或延后',
+          ),
+          value: enabled,
+          onChanged: (value) {
+            pc
+              ..subtitleOffsetEnabled = value
+              ..applySubtitleDelay();
+            setState(() {});
+          },
+        ),
+        if (enabled) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('偏移方向'),
+              const SizedBox(width: 12),
+              ChoiceChip(
+                label: const Text('延后'),
+                selected: _later,
+                onSelected: (_) {
+                  _later = true;
+                  _updateFromFields();
+                },
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('提前'),
+                selected: !_later,
+                onSelected: (_) {
+                  _later = false;
+                  _updateFromFields();
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('精细调控（毫秒）'),
+              Text(
+                _format(offset),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            min: -maxMs.toDouble(),
+            max: maxMs.toDouble(),
+            divisions: 12000,
+            value: (offset * 1000)
+                .clamp(-maxMs.toDouble(), maxMs.toDouble())
+                .toDouble(),
+            label: _format(offset),
+            onChanged: _updateFromSlider,
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: _buildField(_hour, '时')),
+              const SizedBox(width: 6),
+              Expanded(child: _buildField(_minute, '分')),
+              const SizedBox(width: 6),
+              Expanded(child: _buildField(_second, '秒')),
+              const SizedBox(width: 6),
+              Expanded(child: _buildField(_milli, '毫秒')),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '可拖动上方滑块按毫秒精细调节，也可在下方填写需要整体移动的时间。',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildField(TextEditingController controller, String label) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+      onChanged: (_) => _updateFromFields(),
     );
   }
 }

@@ -64,7 +64,6 @@ import 'package:dio/dio.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show compute, kDebugMode;
-import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
@@ -1306,37 +1305,8 @@ class HeaderControlState extends State<HeaderControl>
   double get subtitleBgOpacity => plPlayerController.subtitleBgOpacity;
   double get subtitleStrokeWidth => plPlayerController.subtitleStrokeWidth;
   int get subtitleFontWeight => plPlayerController.subtitleFontWeight;
-  double get subtitleOffset => plPlayerController.subtitleOffset;
-  bool get subtitleOffsetEnabled => plPlayerController.subtitleOffsetEnabled;
-
-  /// 将秒数格式化为「延后 1 时 2 分 3 秒 / 提前 5 分」形式的可读文案。
-  String _formatSubtitleOffset(double seconds) {
-    final abs = seconds.abs().round();
-    final parts = <String>[
-      if (abs ~/ 3600 > 0) '${abs ~/ 3600} 时',
-      if ((abs % 3600) ~/ 60 > 0) '${(abs % 3600) ~/ 60} 分',
-      if (abs % 60 > 0) '${abs % 60} 秒',
-    ];
-    final duration = parts.isEmpty ? '0 秒' : parts.join(' ');
-    return '${seconds >= 0 ? '延后' : '提前'} $duration';
-  }
-
   /// 字幕设置
   void showSetSubtitle() {
-    final currentOffset = plPlayerController.subtitleOffset;
-    final absSeconds = currentOffset.abs().round();
-    final hourController = TextEditingController(
-      text: absSeconds ~/ 3600 == 0 ? '' : '${absSeconds ~/ 3600}',
-    );
-    final minuteController = TextEditingController(
-      text: (absSeconds % 3600) ~/ 60 == 0
-          ? ''
-          : '${(absSeconds % 3600) ~/ 60}',
-    );
-    final secondController = TextEditingController(
-      text: absSeconds % 60 == 0 ? '' : '${absSeconds % 60}',
-    );
-    var offsetLater = currentOffset >= 0;
     showBottomSheet(
       padding: () => isFullScreen ? const .only(bottom: 70) : .zero,
       (context, setState) {
@@ -1400,39 +1370,6 @@ class HeaderControlState extends State<HeaderControl>
           plPlayerController
             ..subtitleFontWeight = val.toInt()
             ..updateSubtitleStyle();
-          setState(() {});
-        }
-
-        // 将偏移值回填到「时/分/秒」输入框，供滑块联动使用。
-        void syncOffsetFields(double offset) {
-          final abs = offset.abs().round();
-          hourController.text = abs ~/ 3600 == 0 ? '' : '${abs ~/ 3600}';
-          minuteController.text = (abs % 3600) ~/ 60 == 0
-              ? ''
-              : '${(abs % 3600) ~/ 60}';
-          secondController.text = abs % 60 == 0 ? '' : '${abs % 60}';
-        }
-
-        void updateOffsetFromFields() {
-          final h = int.tryParse(hourController.text.trim()) ?? 0;
-          final m = int.tryParse(minuteController.text.trim()) ?? 0;
-          final s = int.tryParse(secondController.text.trim()) ?? 0;
-          final total = h * 3600 + m * 60 + s;
-          plPlayerController
-            ..subtitleOffset = (offsetLater ? total : -total).toDouble()
-            ..applySubtitleDelay();
-          setState(() {});
-        }
-
-        // 精细调控滑块：按秒调节，范围前后各 10 分钟。
-        void updateOffsetFromSlider(double val) {
-          final rounded = val.roundToDouble();
-          offsetLater = rounded >= 0;
-          plPlayerController
-            ..subtitleOffset = rounded
-            ..subtitleOffsetEnabled = true
-            ..applySubtitleDelay();
-          syncOffsetFields(rounded);
           setState(() {});
         }
 
@@ -1561,9 +1498,9 @@ class HeaderControlState extends State<HeaderControl>
                       padding: sliderPadding,
                       child: Slider(
                         min: 0,
-                        max: 200,
+                        max: 600,
                         value: subtitlePaddingB.toDouble(),
-                        divisions: 200,
+                        divisions: 600,
                         label: '$subtitlePaddingB',
                         onChanged: updateBottomPadding,
                       ),
@@ -1587,134 +1524,9 @@ class HeaderControlState extends State<HeaderControl>
                         onChanged: updateOpacity,
                       ),
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('字幕时间偏移'),
-                      subtitle: Text(
-                        subtitleOffsetEnabled
-                            ? '当前：${_formatSubtitleOffset(subtitleOffset)}'
-                            : '开启后可将导入的字幕整体提前或延后',
-                      ),
-                      value: subtitleOffsetEnabled,
-                      onChanged: (value) {
-                        plPlayerController
-                          ..subtitleOffsetEnabled = value
-                          ..applySubtitleDelay();
-                        setState(() {});
-                      },
+                    SubtitleOffsetSettings(
+                      playerController: plPlayerController,
                     ),
-                    if (subtitleOffsetEnabled) ...[
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          const Text('偏移方向'),
-                          const SizedBox(width: 12),
-                          ChoiceChip(
-                            label: const Text('延后'),
-                            selected: offsetLater,
-                            onSelected: (_) {
-                              offsetLater = true;
-                              updateOffsetFromFields();
-                            },
-                          ),
-                          const SizedBox(width: 8),
-                          ChoiceChip(
-                            label: const Text('提前'),
-                            selected: !offsetLater,
-                            onSelected: (_) {
-                              offsetLater = false;
-                              updateOffsetFromFields();
-                            },
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('精细调控（按秒）'),
-                          Text(
-                            _formatSubtitleOffset(subtitleOffset),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Padding(
-                        padding: sliderPadding,
-                        child: Slider(
-                          min: -600,
-                          max: 600,
-                          divisions: 1200,
-                          value: subtitleOffset
-                              .clamp(-600.0, 600.0)
-                              .toDouble(),
-                          label: _formatSubtitleOffset(subtitleOffset),
-                          onChanged: updateOffsetFromSlider,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: hourController,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
-                              ],
-                              decoration: const InputDecoration(
-                                labelText: '时',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              onChanged: (_) => updateOffsetFromFields(),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              controller: minuteController,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
-                              ],
-                              decoration: const InputDecoration(
-                                labelText: '分',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              onChanged: (_) => updateOffsetFromFields(),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              controller: secondController,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
-                              ],
-                              decoration: const InputDecoration(
-                                labelText: '秒',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              onChanged: (_) => updateOffsetFromFields(),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '可拖动上方滑块按秒精细调节，也可在下方填写需要整体移动的时间'
-                        '（例如延后 1 分 30 秒）。',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.outline,
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -1723,9 +1535,6 @@ class HeaderControlState extends State<HeaderControl>
         );
       },
     )?.whenComplete(() {
-      hourController.dispose();
-      minuteController.dispose();
-      secondController.dispose();
       plPlayerController.putSubtitleSettings();
     });
   }

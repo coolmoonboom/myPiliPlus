@@ -469,7 +469,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   void onUpdatePadding(EdgeInsets padding) {
-    subtitlePaddingB = padding.bottom.round().clamp(0, 200);
+    subtitlePaddingB = padding.bottom.round().clamp(0, 600);
     putSubtitleSettings();
   }
 
