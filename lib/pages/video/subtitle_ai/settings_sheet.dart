@@ -368,8 +368,8 @@ class SubtitleOffsetSettings extends StatefulWidget {
 
   final PlPlayerController playerController;
 
-  /// 精细调控滑块的毫秒范围（前后各 10 分钟）。
-  static const int maxMilliseconds = 600000;
+  /// 精细调控滑块的毫秒范围（前后各 0.5 秒，1 毫秒一档）。
+  static const int maxMilliseconds = 500;
 
   @override
   State<SubtitleOffsetSettings> createState() => _SubtitleOffsetSettingsState();
@@ -387,8 +387,8 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
   @override
   void initState() {
     super.initState();
-    _later = pc.subtitleOffset >= 0;
-    _syncFields(pc.subtitleOffset);
+    _later = pc.subtitleBaseMs >= 0;
+    _syncFields(pc.subtitleBaseMs);
   }
 
   @override
@@ -400,9 +400,9 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
     super.dispose();
   }
 
-  /// 将偏移值回填到「时/分/秒/毫秒」输入框。
-  void _syncFields(double seconds) {
-    final totalMs = (seconds.abs() * 1000).round();
+  /// 将基准偏移回填到「时/分/秒/毫秒」输入框（参数单位：毫秒）。
+  void _syncFields(double ms) {
+    final totalMs = ms.abs().round();
     _hour.text = totalMs ~/ 3600000 == 0 ? '' : '${totalMs ~/ 3600000}';
     _minute.text = (totalMs % 3600000) ~/ 60000 == 0
         ? ''
@@ -413,28 +413,26 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
     _milli.text = totalMs % 1000 == 0 ? '' : '${totalMs % 1000}';
   }
 
-  void _apply(double seconds) {
-    pc
-      ..subtitleOffset = seconds
-      ..subtitleOffsetEnabled = true
-      ..applySubtitleDelay();
-  }
-
+  /// 输入框只负责设置基准偏移，不触碰精细调控叠加量。
   void _updateFromFields() {
     final h = int.tryParse(_hour.text.trim()) ?? 0;
     final m = int.tryParse(_minute.text.trim()) ?? 0;
     final s = int.tryParse(_second.text.trim()) ?? 0;
     final ms = int.tryParse(_milli.text.trim()) ?? 0;
-    final totalMs = h * 3600000 + m * 60000 + s * 1000 + ms;
-    _apply((_later ? totalMs : -totalMs) / 1000.0);
+    final baseMs = h * 3600000 + m * 60000 + s * 1000 + ms;
+    pc
+      ..setSubtitleBaseMs((_later ? baseMs : -baseMs).toDouble())
+      ..subtitleOffsetEnabled = true
+      ..applySubtitleDelay();
     setState(() {});
   }
 
+  /// 精细调控滑块只负责叠加量，在基准偏移之上叠加，不回写输入框。
   void _updateFromSlider(double milliseconds) {
-    final rounded = milliseconds.roundToDouble();
-    _later = rounded >= 0;
-    _apply(rounded / 1000.0);
-    _syncFields(rounded / 1000.0);
+    pc
+      ..setSubtitleFineTuneMs(milliseconds.roundToDouble())
+      ..subtitleOffsetEnabled = true
+      ..applySubtitleDelay();
     setState(() {});
   }
 
@@ -454,7 +452,8 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final enabled = pc.subtitleOffsetEnabled;
-    final offset = pc.subtitleOffset;
+    final total = pc.subtitleOffset;
+    final fineMs = pc.subtitleFineTuneMs;
     const maxMs = SubtitleOffsetSettings.maxMilliseconds;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -463,7 +462,7 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
           contentPadding: EdgeInsets.zero,
           title: const Text('字幕时间偏移'),
           subtitle: Text(
-            enabled ? '当前：${_format(offset)}' : '开启后可将字幕整体提前或延后',
+            enabled ? '当前总偏移：${_format(total)}' : '开启后可将字幕整体提前或延后',
           ),
           value: enabled,
           onChanged: (value) {
@@ -475,10 +474,15 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
         ),
         if (enabled) ...[
           const SizedBox(height: 8),
+          Text(
+            '基准偏移',
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 6),
           Row(
             children: [
-              const Text('偏移方向'),
-              const SizedBox(width: 12),
               ChoiceChip(
                 label: const Text('延后'),
                 selected: _later,
@@ -498,29 +502,6 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('精细调控（毫秒）'),
-              Text(
-                _format(offset),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          Slider(
-            min: -maxMs.toDouble(),
-            max: maxMs.toDouble(),
-            divisions: 12000,
-            value: (offset * 1000)
-                .clamp(-maxMs.toDouble(), maxMs.toDouble())
-                .toDouble(),
-            label: _format(offset),
-            onChanged: _updateFromSlider,
-          ),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -533,9 +514,29 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
               Expanded(child: _buildField(_milli, '毫秒')),
             ],
           ),
-          const SizedBox(height: 4),
+          const Divider(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('精细调控（毫秒）'),
+              Text(
+                '微调：${_format(fineMs / 1000)}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            min: -maxMs.toDouble(),
+            max: maxMs.toDouble(),
+            divisions: 1000,
+            value: fineMs.clamp(-maxMs.toDouble(), maxMs.toDouble()).toDouble(),
+            label: _format(fineMs / 1000),
+            onChanged: _updateFromSlider,
+          ),
           Text(
-            '可拖动上方滑块按毫秒精细调节，也可在下方填写需要整体移动的时间。',
+            '先用「时/分/秒/毫秒」设置基准偏移，再拖动上方滑块按毫秒叠加微调。',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.outline,
             ),

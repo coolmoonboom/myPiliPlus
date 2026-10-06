@@ -329,7 +329,14 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   late double subtitleStrokeWidth = Pref.subtitleStrokeWidth;
   late int subtitleFontWeight = Pref.subtitleFontWeight;
 
-  /// 字幕时间偏移（秒）。正值字幕延后出现，负值提前。
+  /// 字幕时间偏移的基准值（毫秒，带符号，正值延后/负值提前），
+  /// 由「时/分/秒/毫秒」输入框设置。
+  final RxDouble _subtitleBaseMs = 0.0.obs;
+
+  /// 「精细调控」滑块的叠加量（毫秒，带符号），在基准值之上叠加微调。
+  final RxDouble _subtitleFineTuneMs = 0.0.obs;
+
+  /// 实际生效的总偏移（秒）=（基准 + 精细调控）/ 1000。
   ///
   /// 用响应式字段承载，保证竖屏「每句字幕」列表能即时跟随偏移变化
   /// （暂停时不会再有播放进度更新来触发重建）。
@@ -342,7 +349,35 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 若沿用上一段视频的偏移会让新视频（含导入字幕）整体错位。
   double get subtitleOffset => _subtitleOffset.value;
 
-  set subtitleOffset(double value) => _subtitleOffset.value = value;
+  /// 输入框设置的基准偏移（毫秒，带符号）。
+  double get subtitleBaseMs => _subtitleBaseMs.value;
+
+  /// 精细调控叠加量（毫秒，带符号）。
+  double get subtitleFineTuneMs => _subtitleFineTuneMs.value;
+
+  /// 整体重置偏移（同时清空基准与精细调控）。
+  set subtitleOffset(double value) {
+    _subtitleBaseMs.value = (value * 1000).roundToDouble();
+    _subtitleFineTuneMs.value = 0;
+    _subtitleOffset.value = value;
+  }
+
+  /// 设置基准偏移（毫秒，带符号），保留精细调控叠加量。
+  void setSubtitleBaseMs(double ms) {
+    _subtitleBaseMs.value = ms;
+    _recomputeSubtitleOffset();
+  }
+
+  /// 设置精细调控叠加量（毫秒，带符号），叠加在基准偏移之上。
+  void setSubtitleFineTuneMs(double ms) {
+    _subtitleFineTuneMs.value = ms;
+    _recomputeSubtitleOffset();
+  }
+
+  void _recomputeSubtitleOffset() {
+    _subtitleOffset.value =
+        (_subtitleBaseMs.value + _subtitleFineTuneMs.value) / 1000.0;
+  }
 
   bool get subtitleOffsetEnabled => _subtitleOffsetEnabled.value;
 
