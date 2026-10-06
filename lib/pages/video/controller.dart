@@ -1244,7 +1244,7 @@ class VideoDetailController extends GetxController
       final t = Get.find<UgcIntroController>(
         tag: heroTag,
       ).videoDetail.value.title;
-      if (t.isNotEmpty) {
+      if (t != null && t.isNotEmpty) {
         return t;
       }
     } catch (_) {}
