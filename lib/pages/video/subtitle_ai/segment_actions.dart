@@ -43,6 +43,11 @@ class _SegmentActionSheet extends StatelessWidget {
     return '${segment.text}\n$translated';
   }
 
+  /// 字幕偏移开启时，弹窗展示与循环都应使用叠加偏移后的实际时间。
+  double get _delay => playerController.subtitleOffsetEnabled
+      ? playerController.subtitleOffset
+      : 0.0;
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -52,7 +57,7 @@ class _SegmentActionSheet extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '字幕 ${_fmtTime(segment.from)}',
+            '字幕 ${_fmtTime(segment.from + _delay)}',
             style: Theme.of(context).textTheme.titleSmall,
           ),
           ListTile(
@@ -72,10 +77,9 @@ class _SegmentActionSheet extends StatelessWidget {
             subtitle: const Text('把这句字幕设为片段循环并立即开始'),
             onTap: () {
               Navigator.of(context).maybePop();
-              final from = segment.from.toInt();
-              final to = segment.to.ceil() > from
-                  ? segment.to.ceil()
-                  : from + 1;
+              final from = (segment.from + _delay).round();
+              final shiftedTo = segment.to + _delay;
+              final to = shiftedTo.ceil() > from ? shiftedTo.ceil() : from + 1;
               playerController.setAbLoopStart(from);
               playerController.setAbLoopEnd(to);
               playerController.setAbLoopEnabled(true);
@@ -92,7 +96,11 @@ class _SegmentActionSheet extends StatelessWidget {
               showSubtitleBottomSheet(
                 context,
                 playerController: playerController,
-                child: _SegmentEditSheet(session: session, segment: segment),
+                child: _SegmentEditSheet(
+                  session: session,
+                  segment: segment,
+                  delay: _delay,
+                ),
               );
             },
           ),
@@ -103,10 +111,17 @@ class _SegmentActionSheet extends StatelessWidget {
 }
 
 class _SegmentEditSheet extends StatefulWidget {
-  const _SegmentEditSheet({required this.session, required this.segment});
+  const _SegmentEditSheet({
+    required this.session,
+    required this.segment,
+    required this.delay,
+  });
 
   final LiveSubtitleSession session;
   final LocalSubtitleSegment segment;
+
+  /// 字幕偏移（秒），仅用于标题时间展示。
+  final double delay;
 
   @override
   State<_SegmentEditSheet> createState() => _SegmentEditSheetState();
@@ -151,7 +166,7 @@ class _SegmentEditSheetState extends State<_SegmentEditSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '编辑字幕 ${_fmtTime(widget.segment.from)}',
+            '编辑字幕 ${_fmtTime(widget.segment.from + widget.delay)}',
             style: Theme.of(context).textTheme.titleSmall,
           ),
           const SizedBox(height: 12),
@@ -193,6 +208,6 @@ class _SegmentEditSheetState extends State<_SegmentEditSheet> {
 }
 
 String _fmtTime(double seconds) {
-  final s = seconds.toInt();
-  return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  final total = seconds < 0 ? 0 : seconds.toInt();
+  return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
 }

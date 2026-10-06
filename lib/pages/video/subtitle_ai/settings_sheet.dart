@@ -367,8 +367,8 @@ class SubtitleOffsetSettings extends StatefulWidget {
 
   final PlPlayerController playerController;
 
-  /// 精细调控滑块的毫秒范围（前后各 0.5 秒，1 毫秒一档）。
-  static const int maxMilliseconds = 500;
+  /// 精细调控滑块的毫秒范围（前后各 10 分钟，1 毫秒一档）。
+  static const int maxMilliseconds = 600000;
 
   @override
   State<SubtitleOffsetSettings> createState() => _SubtitleOffsetSettingsState();
@@ -529,7 +529,7 @@ class _SubtitleOffsetSettingsState extends State<SubtitleOffsetSettings> {
           Slider(
             min: -maxMs.toDouble(),
             max: maxMs.toDouble(),
-            divisions: 1000,
+            divisions: maxMs * 2,
             value: fineMs.clamp(-maxMs.toDouble(), maxMs.toDouble()).toDouble(),
             label: _format(fineMs / 1000),
             onChanged: _updateFromSlider,

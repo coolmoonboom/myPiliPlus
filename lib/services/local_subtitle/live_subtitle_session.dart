@@ -13,8 +13,6 @@ import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
 /// 增量字幕识别会话：绑定播放器，边播边识别、边注入字幕。
@@ -247,6 +245,29 @@ class LiveSubtitleSession extends GetxController {
     running.value = false;
   }
 
+  /// 用字幕存档中的识别结果恢复会话，不触发识别。
+  ///
+  /// [inject] 为 true 时立即把结果注入为一支字幕轨并生效；为 false 时仅
+  /// 填充面板展示（用于存档里非激活来源）。
+  Future<void> restoreSegments(
+    List<LocalSubtitleSegment> restored, {
+    bool inject = true,
+  }) async {
+    segments.assignAll(restored);
+    if (!inject || restored.isEmpty || _closed) {
+      return;
+    }
+    final track = await videoDetailController.addSubtitleTrack(
+      LocalSubtitleService.buildSubtitleEntry(bilingual: _bilingual),
+      LocalSubtitleService.buildVtt(restored),
+    );
+    if (_closed) {
+      return;
+    }
+    _injectTrack = track;
+    subtitleTrackIndex.value = track;
+  }
+
   /// 修改某条字幕的原文/译文（按时间定位，面板长按编辑入口调用）。
   ///
   /// 立即强制刷新注入的字幕轨，视频上的字幕同步更新。
@@ -268,21 +289,6 @@ class LiveSubtitleSession extends GetxController {
     );
     segments.refresh();
     unawaited(_inject(force: true));
-  }
-
-  /// 导出识别结果为 SRT
-  Future<void> exportSrt() async {
-    final segs = segments.toList();
-    if (segs.isEmpty) {
-      SmartDialog.showToast('尚无识别结果');
-      return;
-    }
-    final srt = LocalSubtitleService.buildSrt(segs);
-    final tempDir = await getTemporaryDirectory();
-    final file = await File(
-      '${tempDir.path}/subtitles_${DateTime.now().millisecondsSinceEpoch}.srt',
-    ).writeAsString(srt);
-    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
   }
 
   /// 释放会话：停止识别、释放模型、取消 position 订阅。由外部生命周期回调调用。

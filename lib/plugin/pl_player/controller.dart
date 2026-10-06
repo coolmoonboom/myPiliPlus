@@ -1711,6 +1711,42 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     });
   }
 
+  /// 应用一组字幕样式（用于恢复某个视频的存档）。
+  ///
+  /// 仅覆盖当前播放会话的字段并刷新渲染，不写入全局 Pref，
+  /// 这样其它视频的字幕样式不受影响。
+  void applySubtitleStyle({
+    required double fontScale,
+    required double fontScaleFS,
+    required int paddingH,
+    required int paddingB,
+    required double bgOpacity,
+    required double strokeWidth,
+    required int fontWeight,
+  }) {
+    subtitleFontScale = fontScale;
+    subtitleFontScaleFS = fontScaleFS;
+    subtitlePaddingH = paddingH;
+    subtitlePaddingB = paddingB;
+    subtitleBgOpacity = bgOpacity;
+    subtitleStrokeWidth = strokeWidth;
+    subtitleFontWeight = fontWeight.clamp(0, FontWeight.values.length - 1);
+    updateSubtitleStyle();
+  }
+
+  /// 从全局设置重读字幕样式（仅当前会话，不写 Pref）。
+  void resetSubtitleStyleFromPref() {
+    applySubtitleStyle(
+      fontScale: Pref.subtitleFontScale,
+      fontScaleFS: Pref.subtitleFontScaleFS,
+      paddingH: Pref.subtitlePaddingH,
+      paddingB: Pref.subtitlePaddingB,
+      bgOpacity: Pref.subtitleBgOpacity,
+      strokeWidth: Pref.subtitleStrokeWidth,
+      fontWeight: Pref.subtitleFontWeight,
+    );
+  }
+
   bool _isCloseAll = false;
   bool get isCloseAll => _isCloseAll;
 

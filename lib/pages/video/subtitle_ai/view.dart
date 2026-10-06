@@ -54,7 +54,7 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
                   }),
                 ),
                 IconButton(
-                  tooltip: '导入本地字幕文件',
+                  tooltip: '导入字幕文件 / 存档 zip',
                   icon: const Icon(Icons.upload_file_outlined, size: 20),
                   onPressed: () => ctr.importSubtitleFile(context),
                 ),
@@ -71,9 +71,9 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
                   ),
                 ),
                 IconButton(
-                  tooltip: '保存为 SRT',
+                  tooltip: '导出字幕存档 (zip)',
                   icon: const Icon(Icons.save_alt, size: 20),
-                  onPressed: session.exportSrt,
+                  onPressed: ctr.exportSubtitleArchive,
                 ),
               ],
             ),
@@ -174,14 +174,8 @@ class _SubtitleListState extends State<_SubtitleList> {
 
   final ScrollController _scroll = ScrollController();
   final Map<int, GlobalKey> _rowKeys = {};
-  bool _follow = true;
-  int _lastActive = -1;
-
-  @override
-  void initState() {
-    super.initState();
-    _scroll.addListener(_onScrollChanged);
-  }
+  int _lastActive = -2;
+  bool _hasPositioned = false;
 
   @override
   void didUpdateWidget(covariant _SubtitleList oldWidget) {
@@ -189,55 +183,67 @@ class _SubtitleListState extends State<_SubtitleList> {
     // 在「识别字幕」与「导入字幕」之间切换时列表实例不同，重置跟随状态。
     if (!identical(oldWidget.segments, widget.segments)) {
       _rowKeys.clear();
-      _lastActive = -1;
-      _follow = true;
-    }
-  }
-
-  void _onScrollChanged() {
-    if (!_scroll.hasClients) {
-      return;
-    }
-    final pos = _scroll.position;
-    // 用户滚回底部时恢复自动跟随
-    if (pos.pixels >= pos.maxScrollExtent - 120) {
-      _follow = true;
+      _lastActive = -2;
+      _hasPositioned = false;
     }
   }
 
   @override
   void dispose() {
-    _scroll.removeListener(_onScrollChanged);
     _scroll.dispose();
     super.dispose();
   }
 
-  void _maybeFollow(int active, int count) {
-    if (active == _lastActive || !_follow || active < 0) {
+  /// 歌词式跟随：只要当前句变化，就把该句滚动到列表中部。
+  ///
+  /// 列表按需构建，远距离的目标行可能尚未生成（拿不到 context），
+  /// 此时先按平均行高估算位置跳过去，下一帧目标行生成后再精确居中。
+  void _maybeFollow(int active) {
+    if (active < 0 || active == _lastActive) {
       return;
     }
     _lastActive = active;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_follow) {
-        return;
-      }
-      final ctx = _rowKeys[active]?.currentContext;
-      if (ctx != null) {
-        // 歌词式居中：当前行滚动到列表中部
-        Scrollable.ensureVisible(
-          ctx,
-          alignment: 0.5,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
-      }
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _followTo(active, 0));
+  }
+
+  void _followTo(int index, int attempt) {
+    if (!mounted || attempt > 4) {
+      return;
+    }
+    final ctx = _rowKeys[index]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: _hasPositioned
+            ? const Duration(milliseconds: 250)
+            : Duration.zero,
+        curve: Curves.easeOutCubic,
+      );
+      _hasPositioned = true;
+      return;
+    }
+    if (!_scroll.hasClients) {
+      return;
+    }
+    final pos = _scroll.position;
+    final count = widget.segments.length;
+    if (count == 0) {
+      return;
+    }
+    final avgRowHeight = (pos.maxScrollExtent + pos.viewportDimension) / count;
+    final target = (avgRowHeight * index - pos.viewportDimension / 2)
+        .clamp(0.0, pos.maxScrollExtent)
+        .toDouble();
+    pos.jumpTo(target);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _followTo(index, attempt + 1),
+    );
   }
 
   void _onTapSegment(int fromSeconds) {
-    // 点击字幕跳转到对应进度，并恢复自动跟随滚动
-    _follow = true;
-    _lastActive = -1;
+    // 点击字幕跳转到对应进度，并恢复歌词式跟随
+    _lastActive = -2;
     playerController.seekTo(Duration(seconds: fromSeconds));
   }
 
@@ -265,103 +271,94 @@ class _SubtitleListState extends State<_SubtitleList> {
       final delay = playerController.subtitleOffsetEnabled
           ? playerController.subtitleOffset
           : 0.0;
-      int active = segments.length - 1;
+      int active = -1;
       for (var i = 0; i < segments.length; i++) {
-        if (currentPos >= segments[i].from + delay &&
-            currentPos <= segments[i].to + delay + 1) {
+        if (currentPos >= segments[i].from + delay) {
           active = i;
+        } else {
           break;
         }
       }
       if (segments.length < _rowKeys.length) {
         _rowKeys.removeWhere((k, _) => k >= segments.length);
       }
-      _maybeFollow(active, segments.length);
-      return NotificationListener<UserScrollNotification>(
-        onNotification: (n) {
-          // 用户手动滚动时暂停自动跟随，滚回底部后恢复
-          if (n.direction != .idle) {
-            _follow = false;
-          }
-          return false;
-        },
-        child: ListView.builder(
-          controller: _scroll,
-          padding: const EdgeInsets.symmetric(vertical: 80),
-          itemCount: segments.length,
-          itemBuilder: (context, index) {
-            final seg = segments[index];
-            final isActive = index == active;
-            final isPassed = currentPos > seg.to + delay + 1;
-            // 字幕叠加偏移后实际出现的时间点：延后（delay>0）则加，提前则减。
-            final shiftedFrom = (seg.from + delay)
-                .clamp(0, double.infinity)
-                .toDouble();
-            return AnimatedOpacity(
-              key: _rowKeys.putIfAbsent(index, GlobalKey.new),
-              duration: const Duration(milliseconds: 200),
-              opacity: isPassed && !isActive ? 0.45 : 1,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => _onTapSegment(shiftedFrom.toInt()),
-                onLongPress: widget.onLongPress == null
-                    ? null
-                    : () => widget.onLongPress!(seg),
-                child: Container(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 2,
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isActive
-                        ? theme.colorScheme.primaryContainer.withValues(
-                            alpha: 0.45,
-                          )
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _fmtClock(shiftedFrom),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.outline,
-                        ),
+      _maybeFollow(active);
+      return ListView.builder(
+        controller: _scroll,
+        padding: const EdgeInsets.symmetric(vertical: 80),
+        itemCount: segments.length,
+        itemBuilder: (context, index) {
+          final seg = segments[index];
+          final isActive = index == active;
+          final isPassed = currentPos > seg.to + delay + 1;
+          // 字幕叠加偏移后实际出现的时间点：延后（delay>0）则加，提前则减。
+          final shiftedFrom = (seg.from + delay)
+              .clamp(0, double.infinity)
+              .toDouble();
+          return AnimatedOpacity(
+            key: _rowKeys.putIfAbsent(index, GlobalKey.new),
+            duration: const Duration(milliseconds: 200),
+            opacity: isPassed && !isActive ? 0.45 : 1,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _onTapSegment(shiftedFrom.toInt()),
+              onLongPress: widget.onLongPress == null
+                  ? null
+                  : () => widget.onLongPress!(seg),
+              child: Container(
+                margin: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 2,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: isActive
+                      ? theme.colorScheme.primaryContainer.withValues(
+                          alpha: 0.45,
+                        )
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _fmtClock(shiftedFrom),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.outline,
                       ),
-                      const SizedBox(height: 2),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      seg.text,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontSize: isActive ? 16.5 : null,
+                        fontWeight: isActive
+                            ? FontWeight.w700
+                            : FontWeight.w400,
+                        color: isActive ? theme.colorScheme.primary : null,
+                      ),
+                    ),
+                    if (seg.translated != null && seg.translated!.isNotEmpty)
                       Text(
-                        seg.text,
+                        seg.translated!,
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          fontSize: isActive ? 16.5 : null,
+                          fontSize: isActive ? 15 : null,
+                          color: theme.colorScheme.primary,
                           fontWeight: isActive
-                              ? FontWeight.w700
+                              ? FontWeight.w600
                               : FontWeight.w400,
-                          color: isActive ? theme.colorScheme.primary : null,
                         ),
                       ),
-                      if (seg.translated != null && seg.translated!.isNotEmpty)
-                        Text(
-                          seg.translated!,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontSize: isActive ? 15 : null,
-                            color: theme.colorScheme.primary,
-                            fontWeight: isActive
-                                ? FontWeight.w600
-                                : FontWeight.w400,
-                          ),
-                        ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       );
     });
   }

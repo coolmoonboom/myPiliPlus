@@ -66,6 +66,7 @@ import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
+import 'package:PiliPlus/services/local_subtitle/subtitle_archive.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -85,6 +86,9 @@ import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart' hide Subtitle;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 class VideoDetailController extends GetxController
     with GetTickerProviderStateMixin, BlockMixin {
@@ -1134,7 +1138,14 @@ class VideoDetailController extends GetxController
     try {
       final result = await FilePicker.pickFile(
         type: FileType.custom,
-        allowedExtensions: const ['json', 'vtt', 'srt', 'ass', 'bcc'],
+        allowedExtensions: const [
+          'json',
+          'vtt',
+          'srt',
+          'ass',
+          'bcc',
+          'zip',
+        ],
       );
       if (result == null) {
         return;
@@ -1142,6 +1153,18 @@ class VideoDetailController extends GetxController
       final file = result.xFile;
       final path = file.path;
       final name = file.name;
+      // 存档 zip：恢复字幕内容、偏移、样式与播放进度
+      if (name.toLowerCase().endsWith('.zip')) {
+        final archive = SubtitleArchiveStore.decode(await file.readAsBytes());
+        if (archive == null) {
+          SmartDialog.showToast('无法识别该 zip 存档');
+          return;
+        }
+        await _applySubtitleArchive(archive);
+        await _saveSubtitleArchiveCache();
+        SmartDialog.showToast('已恢复字幕存档');
+        return;
+      }
       final length = subtitles.length;
       List<LocalSubtitleSegment> segments = const [];
       if (name.endsWith('.json') || name.endsWith('.bcc')) {
@@ -1177,6 +1200,7 @@ class VideoDetailController extends GetxController
             ? '已导入字幕：$name'
             : '已导入字幕：$name（共 ${segments.length} 句）',
       );
+      unawaited(_saveSubtitleArchiveCache());
     } catch (e) {
       SmartDialog.showToast('加载失败: $e');
     }
@@ -1208,6 +1232,166 @@ class VideoDetailController extends GetxController
       );
     }
     return segments;
+  }
+
+  // ---- 字幕存档：每个视频一份（字幕内容 + 时间偏移 + 字幕样式 + 播放进度）----
+
+  bool _subtitleArchiveRestored = false;
+
+  /// 存档用的视频标题，取不到时回退到 BV 号。
+  String get _archiveTitle {
+    try {
+      final t = Get.find<UgcIntroController>(
+        tag: heroTag,
+      ).videoDetail.value.title;
+      if (t.isNotEmpty) {
+        return t;
+      }
+    } catch (_) {}
+    try {
+      if (watchLaterTitle.isNotEmpty) {
+        return watchLaterTitle;
+      }
+    } catch (_) {}
+    return bvid;
+  }
+
+  /// 汇总当前字幕相关状态，供导出/缓存；没有任何字幕时返回 null。
+  SubtitleArchive? buildSubtitleArchive() {
+    final recognized =
+        _liveSubtitleSession?.segments.toList() ??
+        const <LocalSubtitleSegment>[];
+    final imported = importedSubtitleSegments.toList();
+    if (recognized.isEmpty && imported.isEmpty) {
+      return null;
+    }
+    final activeSource = recognized.isNotEmpty
+        ? SubtitleArchive.sourceRecognized
+        : SubtitleArchive.sourceImported;
+    final pc = plPlayerController;
+    return SubtitleArchive(
+      bvid: bvid,
+      cid: cid.value,
+      title: _archiveTitle,
+      activeSource: activeSource,
+      offsetEnabled: pc.subtitleOffsetEnabled,
+      offsetSeconds: pc.subtitleOffset,
+      progressMs: pc.position.value,
+      style: SubtitleStyleSnapshot(
+        fontScale: pc.subtitleFontScale,
+        fontScaleFS: pc.subtitleFontScaleFS,
+        paddingH: pc.subtitlePaddingH,
+        paddingB: pc.subtitlePaddingB,
+        bgOpacity: pc.subtitleBgOpacity,
+        strokeWidth: pc.subtitleStrokeWidth,
+        fontWeight: pc.subtitleFontWeight,
+      ),
+      imported: imported,
+      recognized: recognized,
+    );
+  }
+
+  /// 导出完整字幕存档（zip），同时写入应用内缓存。
+  Future<void> exportSubtitleArchive() async {
+    final archive = buildSubtitleArchive();
+    if (archive == null) {
+      SmartDialog.showToast('暂无可导出的字幕');
+      return;
+    }
+    try {
+      await SubtitleArchiveStore.saveToCache(archive);
+      final bytes = SubtitleArchiveStore.encode(archive);
+      final name = SubtitleArchiveStore.exportFileName(
+        archive.title,
+        archive.bvid,
+      );
+      final tempDir = await getTemporaryDirectory();
+      final file = await File(p.join(tempDir.path, name)).writeAsBytes(bytes);
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)], subject: name),
+      );
+    } catch (e) {
+      SmartDialog.showToast('导出失败: $e');
+    }
+  }
+
+  /// 把当前字幕状态写入应用内缓存（无字幕时不写）。
+  Future<void> _saveSubtitleArchiveCache() async {
+    final archive = buildSubtitleArchive();
+    if (archive == null) {
+      return;
+    }
+    await SubtitleArchiveStore.saveToCache(archive);
+  }
+
+  /// 打开视频后按 bvid+cid 自动加载缓存存档（每个播放会话只尝试一次）。
+  Future<void> _maybeRestoreSubtitleArchive() async {
+    if (_subtitleArchiveRestored) {
+      return;
+    }
+    _subtitleArchiveRestored = true;
+    if (bvid.isEmpty || cid.value <= 0 || isFileSource) {
+      return;
+    }
+    final archive = await SubtitleArchiveStore.loadFromCache(bvid, cid.value);
+    if (archive == null || archive.isEmpty || isClosed) {
+      return;
+    }
+    await _applySubtitleArchive(archive);
+    SmartDialog.showToast('已自动加载字幕存档');
+  }
+
+  /// 应用存档：字幕样式 + 时间偏移 + 字幕内容 + 播放进度。
+  Future<void> _applySubtitleArchive(SubtitleArchive archive) async {
+    final pc = plPlayerController;
+    pc.applySubtitleStyle(
+      fontScale: archive.style.fontScale,
+      fontScaleFS: archive.style.fontScaleFS,
+      paddingH: archive.style.paddingH,
+      paddingB: archive.style.paddingB,
+      bgOpacity: archive.style.bgOpacity,
+      strokeWidth: archive.style.strokeWidth,
+      fontWeight: archive.style.fontWeight,
+    );
+    pc
+      ..subtitleOffset = archive.offsetSeconds
+      ..subtitleOffsetEnabled = archive.offsetEnabled
+      ..applySubtitleDelay();
+
+    final recognizedActive =
+        archive.activeSource == SubtitleArchive.sourceRecognized;
+    if (archive.imported.isNotEmpty) {
+      await _restoreImportedSubtitles(
+        archive.imported,
+        activate: !recognizedActive,
+      );
+    }
+    if (archive.recognized.isNotEmpty) {
+      await liveSubtitleSession.restoreSegments(
+        archive.recognized,
+        inject: recognizedActive,
+      );
+    }
+    if (archive.progressMs > 0) {
+      await pc.seekTo(Duration(milliseconds: archive.progressMs));
+    }
+  }
+
+  /// 把存档中的导入字幕恢复为一支字幕轨（[activate] 决定是否立即生效）。
+  Future<void> _restoreImportedSubtitles(
+    List<LocalSubtitleSegment> segments, {
+    required bool activate,
+  }) async {
+    final length = subtitles.length;
+    vttSubtitles[length] = (
+      isData: true,
+      id: LocalSubtitleService.buildVtt(segments),
+    );
+    subtitles.add(Subtitle(lan: '', lanDoc: '存档字幕'));
+    importedSubtitleSegments.assignAll(segments);
+    if (activate) {
+      await setSubtitle(length + 1);
+    }
   }
 
   // interactive video
@@ -1243,6 +1427,7 @@ class VideoDetailController extends GetxController
   Future<void> _queryPlayInfo() async {
     vttSubtitles.clear();
     vttSubtitlesIndex.value = 0;
+    _subtitleArchiveRestored = false;
     if (plPlayerController.showViewPoints) {
       viewPointList.clear();
     }
@@ -1327,6 +1512,7 @@ class VideoDetailController extends GetxController
         }
       }
     }
+    await _maybeRestoreSubtitleArchive();
   }
 
   Future<void> _setSubtitle(List<Subtitle> sub) async {
@@ -1382,6 +1568,11 @@ class VideoDetailController extends GetxController
 
   @override
   void onClose() {
+    // 离开视频时把字幕/偏移/样式/进度存档，供下次自动加载
+    final archive = buildSubtitleArchive();
+    if (archive != null) {
+      unawaited(SubtitleArchiveStore.saveToCache(archive));
+    }
     cid.close();
     if (isFileSource) {
       cacheLocalProgress();
