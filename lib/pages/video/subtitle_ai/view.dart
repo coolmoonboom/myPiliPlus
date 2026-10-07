@@ -1,6 +1,7 @@
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:get/get.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:material_ui/material_ui.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/pages/video/subtitle_ai/segment_actions.dart';
@@ -237,7 +238,14 @@ class _SubtitleListState extends State<_SubtitleList> {
 
   bool _onScrollNotification(ScrollNotification notification) {
     // 仅用户拖动产生的通知带 dragDetails；程序 animateTo/jumpTo 为 null，不会被误判。
-    if (notification.dragDetails != null) {
+    final dragging =
+        (notification is ScrollStartNotification &&
+            notification.dragDetails != null) ||
+        (notification is ScrollUpdateNotification &&
+            notification.dragDetails != null) ||
+        (notification is ScrollEndNotification &&
+            notification.dragDetails != null);
+    if (dragging) {
       _userScrollUntil = DateTime.now().add(const Duration(seconds: 5));
     }
     return false;
@@ -252,16 +260,15 @@ class _SubtitleListState extends State<_SubtitleList> {
     }
     final pos = _scroll.position;
     final ctx = _rowKeys[index]?.currentContext;
-    final viewport = pos.context.findRenderObject();
     final row = ctx?.findRenderObject();
-    if (viewport is RenderBox && row is RenderBox && row.attached) {
-      // 只滚动列表自身的 ScrollController：用目标行相对列表视口的位置算偏移，
-      // 避免使用 Scrollable.ensureVisible（它会连带滚动外层 TabBarView 切回本 tab）。
-      final rowTop = row.localToGlobal(Offset.zero, ancestor: viewport).dy;
-      final target =
-          (pos.pixels + rowTop - (viewport.size.height - row.size.height) / 2)
-              .clamp(0.0, pos.maxScrollExtent)
-              .toDouble();
+    if (row is RenderBox && row.attached) {
+      // 只滚动列表自身的 ScrollController：取「行相对内层视口」的目标偏移，
+      // 避免用 Scrollable.ensureVisible（它会连带滚动外层 TabBarView 切回本 tab）。
+      final target = RenderAbstractViewport.of(row)
+          .getOffsetToReveal(row, 0.5)
+          .offset
+          .clamp(0.0, pos.maxScrollExtent)
+          .toDouble();
       if (_hasPositioned) {
         pos.animateTo(
           target,
