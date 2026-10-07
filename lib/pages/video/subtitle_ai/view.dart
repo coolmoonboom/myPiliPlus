@@ -194,6 +194,8 @@ class _SubtitleListState extends State<_SubtitleList> {
   int _lastActive = -2;
   bool _hasPositioned = false;
   bool _wasDragging = false;
+  /// 用户手动滑动列表后，在此时间点之前暂停自动滚动（高亮不受影响）。
+  DateTime? _userScrollUntil;
 
   @override
   void didUpdateWidget(covariant _SubtitleList oldWidget) {
@@ -221,6 +223,11 @@ class _SubtitleListState extends State<_SubtitleList> {
     if (playerController.subtitleOffsetDragging) {
       return;
     }
+    // 用户手动滑动列表后 5 秒内先不自动滚动；高亮仍会逐句更新。
+    final until = _userScrollUntil;
+    if (until != null && DateTime.now().isBefore(until)) {
+      return;
+    }
     if (active < 0 || active == _lastActive) {
       return;
     }
@@ -228,27 +235,45 @@ class _SubtitleListState extends State<_SubtitleList> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _followTo(active, 0));
   }
 
+  bool _onScrollNotification(ScrollNotification notification) {
+    // 仅用户拖动产生的通知带 dragDetails；程序 animateTo/jumpTo 为 null，不会被误判。
+    if (notification.dragDetails != null) {
+      _userScrollUntil = DateTime.now().add(const Duration(seconds: 5));
+    }
+    return false;
+  }
+
   void _followTo(int index, int attempt) {
     if (!mounted || attempt > 4) {
-      return;
-    }
-    final ctx = _rowKeys[index]?.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(
-        ctx,
-        alignment: 0.5,
-        duration: _hasPositioned
-            ? const Duration(milliseconds: 250)
-            : Duration.zero,
-        curve: Curves.easeOutCubic,
-      );
-      _hasPositioned = true;
       return;
     }
     if (!_scroll.hasClients) {
       return;
     }
     final pos = _scroll.position;
+    final ctx = _rowKeys[index]?.currentContext;
+    final viewport = pos.context.findRenderObject();
+    final row = ctx?.findRenderObject();
+    if (viewport is RenderBox && row is RenderBox && row.attached) {
+      // 只滚动列表自身的 ScrollController：用目标行相对列表视口的位置算偏移，
+      // 避免使用 Scrollable.ensureVisible（它会连带滚动外层 TabBarView 切回本 tab）。
+      final rowTop = row.localToGlobal(Offset.zero, ancestor: viewport).dy;
+      final target =
+          (pos.pixels + rowTop - (viewport.size.height - row.size.height) / 2)
+              .clamp(0.0, pos.maxScrollExtent)
+              .toDouble();
+      if (_hasPositioned) {
+        pos.animateTo(
+          target,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        pos.jumpTo(target);
+      }
+      _hasPositioned = true;
+      return;
+    }
     final count = widget.segments.length;
     if (count == 0) {
       return;
@@ -312,7 +337,7 @@ class _SubtitleListState extends State<_SubtitleList> {
       }
       _wasDragging = dragging;
       _maybeFollow(active);
-      return ListView.builder(
+      final list = ListView.builder(
         controller: _scroll,
         padding: const EdgeInsets.symmetric(vertical: 80),
         itemCount: segments.length,
@@ -388,6 +413,10 @@ class _SubtitleListState extends State<_SubtitleList> {
             ),
           );
         },
+      );
+      return NotificationListener<ScrollNotification>(
+        onNotification: _onScrollNotification,
+        child: list,
       );
     });
   }

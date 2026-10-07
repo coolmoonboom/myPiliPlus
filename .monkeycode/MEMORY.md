@@ -99,12 +99,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - 上传：`gh release upload 2.3.0 <apk> --repo coolmoonboom/myPiliPlus`（同名已存在加 --clobber）。若改用 curl POST `uploads.github.com/.../assets?name=...`，`+` 必须写成 URI query 里的 `%2B` + `--data-binary @文件`；multipart `-F name=...`（含表单字段里带 `%`/`+`）会被拒为 `Invalid name for request`，只有 query 方式可行。上传后必须 curl 验证下载 URL 可访问再交付。
   - gh 认证 token 易过期（HTTP 401 Bad credentials）；用 `printf 'protocol=https\nhost=github.com\n\n' | git credential fill` 取 password 后 `gh auth login --with-token` 重新登录即可。
 
-[新 UI 必须用 material_ui 主题体系；视频页弹层走 PageUtils.showVideoBottomSheet]
-- Date: 2026-10-01
-- Context: Discovered by Agent while fixing 字幕面板打不开/深色模式失效
+[material_ui 主题体系与禁止混导 flutter/material；视频页弹层走 PageUtils.showVideoBottomSheet]
+- Date: 2026-10-01（2026-10-03 补充）
+- Context: Discovered by Agent while 修复字幕面板深色失效 / 混导编译失败（CI run 37091894362）
 - Category: Troubleshooting & Debugging
 - Instructions:
-  - 全项目 UI 依赖 package:material_ui/material_ui.dart（Flutter material 的 fork，自带独立 ThemeData/Theme）。新建页面/弹层若 import package:flutter/material.dart，Theme.of 读不到 material_ui 注入的 app 主题（含深色），会渲成 fallback 浅色；且 material_ui 的 ThemeData 不能传给 flutter 的 Theme 组件（编译报 ThemeData 类型不匹配）。
+  - 本项目 UI 层只允许 `package:material_ui/material_ui.dart`（Flutter material 的 fork，自带独立 ThemeData/Theme，并重定义 Theme/Icons/Colors/FilledButton 等）。任何文件再显式 import 'package:flutter/material.dart' 会引发大量 "imported from both" 编译错误。
+  - Theme.of 只认 material_ui 注入的 app 主题（含深色）；用 flutter/material 会渲成 fallback 浅色；material_ui 的 ThemeData 不能传给 flutter 的 Theme 组件（类型不匹配）。缺符号（如 ScrollDirection/UserScrollNotification）优先用 material_ui 已导出的符号 + Dart 3 枚举简写（`n.direction != .idle`、`position.userScrollDirection == .forward`），参考 lib/pages/live_room/controller.dart。
   - 视频页（播放器之上）显示弹层应复用 PageUtils.showVideoBottomSheet 或 HeaderMixin.showBottomSheet（竖屏底部/横屏右侧面板），不要直接 showModalBottomSheet；深色视频页(darkVideoPage)下用 ThemeUtils.darkTheme 包一层内容。
 
 [Whisper 模型目录与导出/导入约定]
@@ -127,13 +128,6 @@ Entries discovered by the Agent during task execution should follow this format:
   - 修法：改为嵌套 `if (a is Map) { final v = a['k']; if (v is Map) {...} }`，不用 case 模式。
   - 排查时可用 dev dart SDK 写最小复现脚本确认行为。
 
-[material_ui 与 flutter/material 禁止混导]
-- Date: 2026-10-03
-- Context: Discovered by Agent while fixing build failure (CI run 37091894362)
-- Category: Troubleshooting & Debugging
-- Instructions:
-  - 本项目 UI 层只允许 `package:material_ui/material_ui.dart`（它 export flutter/widgets.dart 并重定义 Theme/Icons/Colors/FilledButton 等）；任何文件再显式 import 'package:flutter/material.dart' 会引发大量 "imported from both" 编译错误。
-  - 缺符号（如 ScrollDirection/UserScrollNotification）时优先用 material_ui 已导出的 widgets 符号 + Dart 3 枚举简写（`n.direction != .idle`、`position.userScrollDirection == .forward`），参考 lib/pages/live_room/controller.dart；确有文件同时导两者时须逐个 hide 冲突符号，避免。
 [Dart SDK 差异与编译陷阱汇总（dart:io / 级联+lambda）]
 - Date: 2026-10-03
 - Context: Discovered by Agent while 修复 CI 编译失败（RandomAccessFile.open；级联+lambda）
@@ -150,3 +144,12 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - VideoDetailController 用 `Get.put(VideoDetailController(), tag: heroTag)` 创建（无 binding），页面退出时 GetX 不保证调用其 onClose，只在 onClose 落盘会丢数据。
   - 需要持久化的状态应在确定执行的生命周期落盘：View 的 dispose()、didChangeAppLifecycleState 的 paused、子面板 dispose()，以及播放中按节流间隔（positionListener 每约 10s）。
+
+[Scrollable.ensureVisible 会连带滚动外层 TabBarView，跨 tab 跟随禁止用它]
+- Date: 2026-10-07
+- Context: Discovered by Agent while 定位「字幕播放到下一句会自动切回字幕 tab」
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - Flutter `Scrollable.ensureVisible(ctx, alignment: 0.5)` 会把 ctx 的**所有祖先滚动容器**一起滚动才能让目标可见。字幕页是外层 TabBarView（PageView）的一页，列表内调用它会连带把外层 PageView 翻回字幕 tab，即使用户正停在其他 tab 或面板被 keep-alive。
+  - 只想滚动内层列表时，改为直接操作该列表自己的 ScrollController：用 `row.localToGlobal(Offset.zero, ancestor: viewportRenderBox).dy` 求目标相对视口偏移，再 `position.animateTo/jumpTo`；viewport 取 `controller.position.context.findRenderObject()`。
+  - 用户手动滑动期间要临时屏蔽自动滚动（但保留高亮）：用 `NotificationListener<ScrollNotification>`，仅当 `notification.dragDetails != null`（用户拖动）时置截止时间；程序 animateTo/jumpTo 的 dragDetails 为 null，不会误判。
