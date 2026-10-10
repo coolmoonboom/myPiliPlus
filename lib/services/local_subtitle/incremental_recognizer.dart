@@ -12,10 +12,18 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
+/// 已识别的时间区间（秒），用于字幕面板展示识别覆盖进度。
+class SubtitleCoverageRange {
+  const SubtitleCoverageRange(this.fromSeconds, this.toSeconds);
+
+  final int fromSeconds;
+  final int toSeconds;
+}
+
 /// 分段增量识别器。
 ///
 /// 不再整段下载音频后一次性识别，而是把音频流按字节范围分段下载
-/// （每段约 60 秒），一段段边播边识别：
+/// （每段约 30 秒），一段段边播边识别：
 ///   - 只下载音频流的字节区间，流量远小于整段下载 + 整段视频
 ///   - 识别进度跟随播放进度（可选），实现"边播边出字幕"
 ///   - 支持播放进度跳变（拖动）后从新位置继续识别
@@ -26,7 +34,9 @@ class IncrementalRecognizer extends GetxController {
     this.audioUrl = '',
     this.audioFile,
     RxList<LocalSubtitleSegment>? segments,
-  }) : segments = segments ?? <LocalSubtitleSegment>[].obs;
+    RxList<SubtitleCoverageRange>? coverage,
+  }) : segments = segments ?? <LocalSubtitleSegment>[].obs,
+       coverage = coverage ?? <SubtitleCoverageRange>[].obs;
 
   /// 音频流地址（在线模式；无音频时退化为视频流地址）
   final String audioUrl;
@@ -41,9 +51,6 @@ class IncrementalRecognizer extends GetxController {
   /// 视频总时长（秒）
   final int totalSeconds;
 
-  /// 顺序识别（不跟随播放）时每段的时长（秒）
-  static const int chunkSeconds = 40;
-
   /// 跟随播放时，识别窗口向后回看当前位置前的秒数（覆盖前文给全字幕）。
   ///
   /// 回看越多首段越长、首条字幕出得越慢，权衡后取 10 秒。
@@ -56,10 +63,33 @@ class IncrementalRecognizer extends GetxController {
 
   /// 识别结果列表；会话会注入共享实例，保证 UI 订阅的对象稳定
   final RxList<LocalSubtitleSegment> segments;
+
+  /// 已识别时间区间；会话会注入共享实例，供 UI 展示识别覆盖进度
+  final RxList<SubtitleCoverageRange> coverage;
   final RxString status = ''.obs;
   final RxBool running = false.obs;
 
-  WhisperModel? model;
+  WhisperModel? _model;
+
+  /// 识别模型。切换模型会改变块长，旧的块索引随之失效，故重置块进度。
+  WhisperModel? get model => _model;
+  set model(WhisperModel? value) {
+    if (_model == value) {
+      return;
+    }
+    final oldBlock = _blockSecondsFor(_model);
+    _model = value;
+    final newBlock = _blockSecondsFor(value);
+    if (oldBlock != newBlock) {
+      _settledBlocks.clear();
+      _blockTries.clear();
+      coverage.clear();
+      SubtitleDebugLog.instance.log(
+        '识别模型切换，块长 $oldBlock→$newBlock 秒，已重置块进度',
+      );
+    }
+  }
+
   bool bilingual = true;
 
   /// 跟随播放进度（false = 从头到尾顺序识别全部）
@@ -74,10 +104,27 @@ class IncrementalRecognizer extends GetxController {
   Uint8List? _initHeader;
   bool _rangeSupported = false;
 
-  /// 每个识别块的时长（秒）。整片按此长度切块，块优先级队列调度。
-  /// 30 秒：手机上 base 模型一段约 40~75 秒可出结果，兼顾「拖到哪里都快出字幕」
-  /// 与转写固定开销。
-  static const int blockSeconds = 30;
+  /// 每个识别块的时长（秒），按模型自适应：整片按此长度切块，块优先级队列调度。
+  ///
+  /// 模型越大单块越慢，缩短块长让「拖到哪里都能更快出第一条字幕」；小模型
+  /// 可放宽块长以减少边界开销。base 30 秒：手机上约 40~75 秒可出一段结果。
+  int get blockSeconds => _blockSecondsFor(_model);
+
+  static int _blockSecondsFor(WhisperModel? m) {
+    switch (m) {
+      case WhisperModel.tiny:
+        return 40;
+      case WhisperModel.base:
+        return 30;
+      case WhisperModel.small:
+        return 20;
+      case WhisperModel.medium:
+      case WhisperModel.large:
+        return 15;
+      default:
+        return 30;
+    }
+  }
 
   /// 单块最多尝试次数，超过则跳过该块（避免无限重试卡住队列）
   static const int _maxTriesPerBlock = 3;
@@ -460,8 +507,8 @@ class IncrementalRecognizer extends GetxController {
 
   int get _blockCount => (totalSeconds + blockSeconds - 1) ~/ blockSeconds;
 
-  /// 用户跳转次数。块执行期间发生跳转时丢弃该块结果重新选块，
-  /// 保证「优先识别用户当前进度」，且跳转不消耗该块的重试次数。
+  /// 用户跳转世代。跳转只影响「接下来从哪块开始认」；已完成块的结果一律保留，
+  /// 跳转不消耗该块的重试次数。
   int _seekEpoch = 0;
 
   /// 块优先级队列调度：
@@ -486,24 +533,23 @@ class IncrementalRecognizer extends GetxController {
       );
       try {
         final added = await _processChunk(s0, s1);
-        if (_seekEpoch != epoch) {
-          // 识别期间用户切换了位置：结果可能已过时，退回队列重新选块
-          _blockTries[blk] = tries - 1;
-          SubtitleDebugLog.instance.log('块 $blk 执行期间发生跳转，重新调度');
-          continue;
+        if (_cancelled) {
+          break;
         }
+        // 块内容只与音频时间段相关：即便识别期间用户拖动跳转，结果依然有效。
+        // 原生转写无法中断，丢弃已完成的结果纯属浪费，故一律保留落盘。
         if (added) {
           segments.refresh();
         }
         _settledBlocks.add(blk);
+        _registerCoverage(s0, s1);
         SubtitleDebugLog.instance.log('块完成 $blk 累计${segments.length}条');
+        if (_seekEpoch != epoch) {
+          SubtitleDebugLog.instance.log('块 $blk 期间发生跳转，结果已保留，按新位置继续');
+        }
       } catch (e) {
         if (_cancelled) {
           break;
-        }
-        if (_seekEpoch != epoch) {
-          _blockTries[blk] = tries - 1;
-          continue;
         }
         SubtitleDebugLog.instance.log('块失败 $blk ${_fmt(s0)}（第$tries次）：$e');
         if (tries >= _maxTriesPerBlock) {
@@ -747,6 +793,26 @@ class IncrementalRecognizer extends GetxController {
     });
   }
 
+  /// 记录一个已识别块的时间区间，合并相邻/重叠区间，供 UI 展示覆盖进度。
+  void _registerCoverage(int s0, int s1) {
+    final merged = <SubtitleCoverageRange>[
+      ...coverage,
+      SubtitleCoverageRange(s0, s1),
+    ]..sort((a, b) => a.fromSeconds.compareTo(b.fromSeconds));
+    final out = <SubtitleCoverageRange>[];
+    for (final r in merged) {
+      if (out.isEmpty || r.fromSeconds > out.last.toSeconds + 1) {
+        out.add(r);
+      } else if (r.toSeconds > out.last.toSeconds) {
+        out[out.length - 1] = SubtitleCoverageRange(
+          out.last.fromSeconds,
+          r.toSeconds,
+        );
+      }
+    }
+    coverage.assignAll(out);
+  }
+
   /// 合入一段转写结果：块调度可能乱序产出，且重试块会与已识别区间重叠。
   /// 时间上重叠的分段保留时长更长（内容更完整）的一条，最后整体按开始时间排序。
   bool _append(
@@ -820,13 +886,14 @@ class IncrementalRecognizer extends GetxController {
   }
 
   /// 播放位置跳变（拖动进度条）时调用：
-  /// 已识别结果全部保留（回看已认过的区间直接可看，不清空），
-  /// 仅递增跳转世代，让正在执行的块完成后丢弃结果并重新按新位置选块。
+  /// 已识别结果全部保留（回看已认过的区间直接可看，不清空），仅递增跳转世代，
+  /// 让队列下一次从新位置选块。正在执行的块完成后结果仍会保留落盘。
   void onSeek(int newPosition) {
     if (!followPlayback || _cancelled) {
       return;
     }
     _seekEpoch++;
+    status.value = '已跳到 ${_fmt(newPosition)}，从当前位置继续识别';
     SubtitleDebugLog.instance.log(
       '检测到跳转 -> ${_fmt(newPosition)}，保留已有 ${segments.length} 条字幕',
     );

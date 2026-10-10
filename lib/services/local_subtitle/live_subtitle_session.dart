@@ -41,6 +41,10 @@ class LiveSubtitleSession extends GetxController {
   StreamSubscription<void>? _segSub;
   int _lastPosition = -1;
 
+  /// 拖动去抖：连续拖动时只在用户停手后提交一次跳转，避免反复重排队列。
+  int? _pendingSeek;
+  Timer? _seekDebounce;
+
   /// 注入字幕轨的 1 起始轨号；-1 表示正在添加，0 表示尚未注入
   int _injectTrack = 0;
   Timer? _injectTimer;
@@ -52,6 +56,10 @@ class LiveSubtitleSession extends GetxController {
   /// 若 getter 在识别器缺位时返回别的列表，订阅就会落在错误对象上，
   /// 导致识别出内容后面板也不刷新（字幕 tab 一直空白）。
   final RxList<LocalSubtitleSegment> segments = <LocalSubtitleSegment>[].obs;
+
+  /// 已识别时间区间（识别覆盖进度），与识别器共享同一实例供 UI 订阅。
+  final RxList<SubtitleCoverageRange> coverage =
+      <SubtitleCoverageRange>[].obs;
 
   Stream<int> get positionStream => plPlayerController.position.stream;
 
@@ -75,7 +83,18 @@ class LiveSubtitleSession extends GetxController {
       return;
     }
     if (_lastPosition >= 0 && (pos - _lastPosition).abs() > 8) {
-      _recognizer?.onSeek(pos);
+      // 拖动去抖：连续拖动时只在用户停手后提交一次跳转。
+      _pendingSeek = pos;
+      _seekDebounce?.cancel();
+      _seekDebounce = Timer(const Duration(milliseconds: 600), () {
+        final target = _pendingSeek;
+        _pendingSeek = null;
+        _seekDebounce = null;
+        if (target == null || !running.value) {
+          return;
+        }
+        _recognizer?.onSeek(target);
+      });
     }
     _lastPosition = pos;
   }
@@ -148,6 +167,7 @@ class LiveSubtitleSession extends GetxController {
       audioFile: audioFile,
       totalSeconds: total,
       segments: segments,
+      coverage: coverage,
     );
     if (firstTime) {
       recognizer.releaseModelOnExit = false;
@@ -184,6 +204,8 @@ class LiveSubtitleSession extends GetxController {
       ..followPlayback = _followPlayback;
     recognizer.positionProvider = () => plPlayerController.position.value;
     recognizer.releaseModelOnExit = false;
+    // 从当前位置起算，避免恢复识别时首个位置回调被误判为跳转
+    _lastPosition = plPlayerController.position.value;
     SubtitleDebugLog.instance.log(
       '复用识别器：已保留 ${segments.length} 条结果，'
       '剩余块将继续按优先队列识别',
@@ -237,6 +259,9 @@ class LiveSubtitleSession extends GetxController {
   void stop() {
     _injectTimer?.cancel();
     _injectTimer = null;
+    _seekDebounce?.cancel();
+    _seekDebounce = null;
+    _pendingSeek = null;
     _recognizer?.stop();
     SubtitleDebugLog.instance.log('会话停止（保留已识别结果）');
     if (segments.isNotEmpty) {
@@ -254,6 +279,11 @@ class LiveSubtitleSession extends GetxController {
     bool inject = true,
   }) async {
     segments.assignAll(restored);
+    // 存档中的结果即已完整识别，覆盖度按整片记满。
+    final total = plPlayerController.duration.value;
+    if (total > 0) {
+      coverage.assignAll([SubtitleCoverageRange(0, total)]);
+    }
     if (!inject || restored.isEmpty || _closed) {
       return;
     }
@@ -296,6 +326,9 @@ class LiveSubtitleSession extends GetxController {
     _closed = true;
     _injectTimer?.cancel();
     _injectTimer = null;
+    _seekDebounce?.cancel();
+    _seekDebounce = null;
+    _pendingSeek = null;
     final recognizer = _recognizer;
     if (recognizer != null) {
       // 页面退出：本轮循环结束后释放原生模型（若用户已开新会话则由守卫跳过）

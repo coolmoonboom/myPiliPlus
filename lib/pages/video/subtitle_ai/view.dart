@@ -1,4 +1,6 @@
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/services/local_subtitle/incremental_recognizer.dart';
+import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:get/get.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
@@ -106,6 +108,14 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
             }
             return const SizedBox.shrink();
           }),
+          if (!showImported)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _CoverageBar(
+                session: session,
+                playerController: ctr.plPlayerController,
+              ),
+            ),
           if (hasImported)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
@@ -424,6 +434,72 @@ class _SubtitleListState extends State<_SubtitleList> {
       return NotificationListener<ScrollNotification>(
         onNotification: _onScrollNotification,
         child: list,
+      );
+    });
+  }
+}
+
+/// 识别覆盖进度条：按已识别时间区间着色，红点标记当前播放位置。
+///
+/// 让用户在拖动进度条后一眼看出哪些时间段已有字幕、哪些还在补。
+class _CoverageBar extends StatelessWidget {
+  const _CoverageBar({required this.session, required this.playerController});
+
+  final LiveSubtitleSession session;
+  final PlPlayerController playerController;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Obx(() {
+      final total = playerController.duration.value;
+      final ranges = session.coverage.toList();
+      final running = session.running.value;
+      if (total <= 0 || (ranges.isEmpty && !running)) {
+        return const SizedBox.shrink();
+      }
+      final pos = (playerController.position.value / total).clamp(0.0, 1.0);
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          return SizedBox(
+            height: 6,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+                for (final r in ranges)
+                  Positioned(
+                    left: (r.fromSeconds / total).clamp(0.0, 1.0) * w,
+                    width: ((r.toSeconds - r.fromSeconds) / total).clamp(
+                          0.0,
+                          1.0,
+                        ) *
+                        w,
+                    top: 0,
+                    bottom: 0,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary.withValues(alpha: 0.65),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: (pos * w - 1).clamp(0.0, (w - 2).clamp(0.0, w)),
+                  top: 0,
+                  bottom: 0,
+                  child: Container(width: 2, color: theme.colorScheme.error),
+                ),
+              ],
+            ),
+          );
+        },
       );
     });
   }
