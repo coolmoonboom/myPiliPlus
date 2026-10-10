@@ -4,6 +4,7 @@ import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/models_new/video/video_play_info/subtitle.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
+import 'package:PiliPlus/services/local_subtitle/local_models.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
@@ -47,32 +48,26 @@ class LocalSubtitleSegment {
 ///
 /// 流程：获取音频 -> 端内 Whisper 识别（法语）->（可选）翻译为中文 -> 生成 VTT。
 abstract final class LocalSubtitleService {
-  static const WhisperModel defaultModel = WhisperModel.base;
+  static const LocalModel defaultModel = kDefaultLocalModel;
 
   /// 最近一次 [transcribeWithModel] 的错误信息（用于识别层判断是否为模型问题）
   static String? lastTranscribeError;
 
-  static const List<({WhisperModel model, String label})> modelOptions = [
-    (model: WhisperModel.tiny, label: 'tiny (最快, 约75MB)'),
-    (model: WhisperModel.base, label: 'base (推荐, 约140MB)'),
-    (model: WhisperModel.small, label: 'small (更准, 约460MB)'),
-    (model: WhisperModel.medium, label: 'medium (高准, 约1.5GB)'),
-    (model: WhisperModel.large, label: 'large-v3 (最佳, 约3GB)'),
-  ];
+  /// 可选识别模型（标准 + turbo/量化扩展）。
+  static const List<LocalModel> modelOptions = kLocalModels;
 
-  static String modelLabel(WhisperModel model) =>
-      modelOptions.firstWhere((e) => e.model == model).label;
+  static String modelLabel(LocalModel model) => model.label;
 
   /// 当前使用的识别模型（实时与离线识别共用）。
-  static WhisperModel get currentModel {
+  static LocalModel get currentModel {
     final box = GStorage.setting;
     final index = box.get(SettingBoxKey.whisperModel, defaultValue: 1);
-    return modelOptions[index.clamp(0, modelOptions.length - 1)].model;
+    return modelOptions[index.clamp(0, modelOptions.length - 1)];
   }
 
   /// 设置当前识别模型。
-  static void setCurrentModel(WhisperModel model) {
-    final index = modelOptions.indexWhere((e) => e.model == model);
+  static void setCurrentModel(LocalModel model) {
+    final index = modelOptions.indexOf(model);
     if (index >= 0) {
       GStorage.setting.put(SettingBoxKey.whisperModel, index);
     }
@@ -116,7 +111,7 @@ abstract final class LocalSubtitleService {
   }
 
   /// 下载 whisper 模型（如已缓存则直接返回路径）。
-  static Future<void> ensureModel(WhisperModel model) {
+  static Future<void> ensureModel(LocalModel model) {
     return ModelManager.instance.ensure(model);
   }
 
@@ -125,7 +120,7 @@ abstract final class LocalSubtitleService {
   /// 与 WhisperController.transcribe 等价，但模型路径取自
   /// [ModelManager.pathOf]（Android 上位于 Download，用户可导出/导入）。
   static Future<WhisperTranscribeResponse?> transcribeWithModel({
-    required WhisperModel model,
+    required LocalModel model,
     required String audioPath,
     String lang = 'fr',
     String? initialPrompt,
@@ -146,7 +141,7 @@ abstract final class LocalSubtitleService {
     );
     try {
       lastTranscribeError = null;
-      return await Whisper(model: model).transcribe(
+      return await Whisper(model: model.arch).transcribe(
         transcribeRequest: TranscribeRequest(
           audio: audioPath,
           language: lang,
@@ -182,7 +177,7 @@ abstract final class LocalSubtitleService {
   /// 执行识别并生成字幕分段。
   static Future<LoadingState<List<LocalSubtitleSegment>>> recognize({
     required DataSource dataSource,
-    WhisperModel model = defaultModel,
+    LocalModel model = defaultModel,
     bool bilingual = true,
     void Function(String stage)? onStage,
     void Function(int percent)? onProgress,

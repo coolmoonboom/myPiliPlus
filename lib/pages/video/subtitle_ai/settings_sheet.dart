@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/services/local_subtitle/local_models.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_translator.dart';
@@ -16,7 +17,6 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
-import 'package:whisper_ggml/whisper_ggml.dart';
 
 /// 在视频页之上显示字幕相关面板。
 ///
@@ -163,24 +163,24 @@ class ModelSelector extends StatefulWidget {
 }
 
 class _ModelSelectorState extends State<ModelSelector> {
-  late WhisperModel _current = LocalSubtitleService.currentModel;
+  late LocalModel _current = LocalSubtitleService.currentModel;
 
-  void _select(WhisperModel model) {
+  void _select(LocalModel model) {
     if (model == _current) {
       return;
     }
     setState(() => _current = model);
     LocalSubtitleService.setCurrentModel(model);
-    final state = widget.modelManager.states[model.modelName];
+    final state = widget.modelManager.states[model.id];
     if (state == null ||
         (state.state != ModelTaskState.done &&
             state.state != ModelTaskState.downloading)) {
       if (state?.state == ModelTaskState.corrupt) {
         widget.modelManager.redownload(model);
-        SmartDialog.showToast('模型文件损坏，正在重新下载 ${model.modelName}…');
+        SmartDialog.showToast('模型文件损坏，正在重新下载 ${model.label}…');
       } else {
         widget.modelManager.download(model);
-        SmartDialog.showToast('正在下载 ${model.modelName} 识别模型…');
+        SmartDialog.showToast('正在下载 ${model.label} 识别模型…');
       }
     }
   }
@@ -203,7 +203,7 @@ class _ModelSelectorState extends State<ModelSelector> {
         ...ModelManager.managedModels.map((model) {
           return Obx(() {
             final state =
-                widget.modelManager.states[model.modelName] ??
+                widget.modelManager.states[model.id] ??
                 ModelState.unknown;
             return _buildRow(context, model, state);
           });
@@ -219,7 +219,7 @@ class _ModelSelectorState extends State<ModelSelector> {
     );
   }
 
-  Future<void> _export(WhisperModel model) async {
+  Future<void> _export(LocalModel model) async {
     final path = await widget.modelManager.exportModelPath(model);
     if (path == null) {
       SmartDialog.showToast('模型尚未下载');
@@ -242,7 +242,7 @@ class _ModelSelectorState extends State<ModelSelector> {
         onPick: (file) async {
           final model = await widget.modelManager.importModel(file);
           if (model != null) {
-            SmartDialog.showToast('已导入 ${model.modelName} 模型');
+            SmartDialog.showToast('已导入 ${model.label} 模型');
           } else {
             SmartDialog.showToast('导入失败：模型文件名需为 ggml-<name>.bin');
           }
@@ -252,7 +252,7 @@ class _ModelSelectorState extends State<ModelSelector> {
     );
   }
 
-  Widget _buildRow(BuildContext context, WhisperModel model, ModelState state) {
+  Widget _buildRow(BuildContext context, LocalModel model, ModelState state) {
     final theme = Theme.of(context);
     final label = LocalSubtitleService.modelLabel(model);
     final progress = state.progress;
@@ -278,12 +278,24 @@ class _ModelSelectorState extends State<ModelSelector> {
                 ),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text(
-                    label,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: isCurrent ? theme.colorScheme.primary : null,
-                      fontWeight: isCurrent ? FontWeight.w600 : null,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: isCurrent ? theme.colorScheme.primary : null,
+                          fontWeight: isCurrent ? FontWeight.w600 : null,
+                        ),
+                      ),
+                      if (model.hint != null)
+                        Text(
+                          model.hint!,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 if (isCurrent)

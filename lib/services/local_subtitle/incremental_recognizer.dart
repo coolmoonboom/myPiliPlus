@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/services/local_subtitle/local_models.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
@@ -69,11 +70,11 @@ class IncrementalRecognizer extends GetxController {
   final RxString status = ''.obs;
   final RxBool running = false.obs;
 
-  WhisperModel? _model;
+  LocalModel? _model;
 
   /// 识别模型。切换模型会改变块长，旧的块索引随之失效，故重置块进度。
-  WhisperModel? get model => _model;
-  set model(WhisperModel? value) {
+  LocalModel? get model => _model;
+  set model(LocalModel? value) {
     if (_model == value) {
       return;
     }
@@ -110,8 +111,8 @@ class IncrementalRecognizer extends GetxController {
   /// 可放宽块长以减少边界开销。base 30 秒：手机上约 40~75 秒可出一段结果。
   int get blockSeconds => _blockSecondsFor(_model);
 
-  static int _blockSecondsFor(WhisperModel? m) {
-    switch (m) {
+  static int _blockSecondsFor(LocalModel? m) {
+    switch (m?.arch) {
       case WhisperModel.tiny:
         return 40;
       case WhisperModel.base:
@@ -184,7 +185,7 @@ class IncrementalRecognizer extends GetxController {
     SubtitleDebugLog.instance.log(
       '开始识别 fromSeconds=$fromSeconds '
       'totalSeconds=$totalSeconds follow=$followPlayback '
-      'model=${model?.modelName ?? 'null'}',
+      'model=${model?.id ?? 'null'}',
     );
     running.value = true;
     status.value = '准备音频';
@@ -673,7 +674,7 @@ class IncrementalRecognizer extends GetxController {
     final startedAt = DateTime.now();
     SubtitleDebugLog.instance.log(
       '转写开始 s0=$s0 t0=${t0.toStringAsFixed(2)} 音频${data.length}B '
-      '模型=${model?.modelName ?? 'base'}',
+      '模型=${model?.id ?? 'base'}',
     );
     // 心跳：转写进度回调粒度很粗（首尾才更新），期间显示已耗时秒数，
     // 让用户看到识别在进行中，而不是误以为卡在 0%
@@ -691,7 +692,7 @@ class IncrementalRecognizer extends GetxController {
     try {
       // 看门狗：单段转写超过 4 分钟视为挂起，按失败跳过，绝不永久卡住
       result = await LocalSubtitleService.transcribeWithModel(
-        model: model ?? WhisperModel.base,
+        model: model ?? kDefaultLocalModel,
         audioPath: file.path,
         lang: 'fr',
         withSegments: true,

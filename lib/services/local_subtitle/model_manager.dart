@@ -7,6 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
+import 'local_models.dart';
+
 enum ModelTaskState { idle, downloading, paused, done, corrupt }
 
 /// 模型文件校验结果（用于诊断「文件存在但加载失败」）。
@@ -55,13 +57,8 @@ class ModelManager {
   /// 全局单例
   static final ModelManager instance = ModelManager._();
 
-  static const List<WhisperModel> managedModels = [
-    WhisperModel.tiny,
-    WhisperModel.base,
-    WhisperModel.small,
-    WhisperModel.medium,
-    WhisperModel.large,
-  ];
+  /// 受管理的模型列表（含标准与量化/turbo 扩展模型）。
+  static const List<LocalModel> managedModels = kLocalModels;
 
   final RxMap<String, ModelState> states = <String, ModelState>{}.obs;
 
@@ -70,18 +67,10 @@ class ModelManager {
   /// 合法模型文件的最小体积（最小的 tiny 模型也有几十 MB）
   static const int _minModelBytes = 4 * 1024 * 1024;
 
-  /// 各模型在 HuggingFace `ggerganov/whisper.cpp` 上的标准体积（字节），
-  /// 用于识别下载/迁移过程中被截断的文件。识别时允许 10% 的余量。
-  static const Map<String, int> _expectedBytes = {
-    'tiny': 77691713,
-    'base': 147951465,
-    'small': 487601967,
-    'medium': 1533763059,
-    'large-v3': 3095033483,
-  };
-
-  int _minExpectedBytes(WhisperModel model) {
-    final expected = _expectedBytes[model.modelName] ?? 0;
+  /// 校验模型文件体积：以 [LocalModel.expectedBytes] 为基准，允许 10% 余量，
+  /// 用于识别下载/迁移过程中被截断的文件。
+  int _minExpectedBytes(LocalModel model) {
+    final expected = model.expectedBytes;
     final withMargin = expected - expected ~/ 10;
     return withMargin > _minModelBytes ? withMargin : _minModelBytes;
   }
@@ -92,7 +81,7 @@ class ModelManager {
   /// 新版 GGUF 魔数，字节 `47 47 55 46`（"GGUF"）
   static const List<int> _ggufMagic = [0x47, 0x47, 0x55, 0x46];
 
-  String _key(WhisperModel model) => model.modelName;
+  String _key(LocalModel model) => model.id;
 
   static bool _matchesMagic(List<int> head) {
     if (head.length < 4) {
@@ -152,7 +141,7 @@ class ModelManager {
   }
 
   /// 校验某模型文件（供识别前诊断与调试日志使用）。
-  Future<ModelValidation> validate(WhisperModel model) async {
+  Future<ModelValidation> validate(LocalModel model) async {
     final file = File(await pathOf(model));
     if (!await file.exists()) {
       return const ModelValidation(exists: false, size: 0);
@@ -222,8 +211,13 @@ class ModelManager {
   }
 
   /// 把历史版本下载到应用私有目录的模型迁移到新目录（旧的删掉以释放空间）。
-  Future<void> _migrate(WhisperModel model) async {
-    final oldPath = await WhisperController().getPath(model);
+  ///
+  /// 仅标准模型（历史版本可能下载过）需要迁移；自定义/量化模型从未落过旧目录。
+  Future<void> _migrate(LocalModel model) async {
+    if (model.id != model.arch.modelName) {
+      return;
+    }
+    final oldPath = await WhisperController().getPath(model.arch);
     final newPath = await pathOf(model);
     if (oldPath == newPath) {
       return;
@@ -242,23 +236,23 @@ class ModelManager {
     } catch (_) {}
   }
 
-  Future<String> pathOf(WhisperModel model) async =>
-      '${(await _modelDir()).path}/ggml-${model.modelName}.bin';
+  Future<String> pathOf(LocalModel model) async =>
+      '${(await _modelDir()).path}/${model.fileName}';
 
-  Future<String> _partPath(WhisperModel model) async =>
+  Future<String> _partPath(LocalModel model) async =>
       '${await pathOf(model)}.part';
 
-  bool isDownloading(WhisperModel model) =>
+  bool isDownloading(LocalModel model) =>
       states[_key(model)]?.state == ModelTaskState.downloading;
 
   /// 是否已下载（用于识别前快速判断）
-  Future<bool> exists(WhisperModel model) async =>
+  Future<bool> exists(LocalModel model) async =>
       await File(await pathOf(model)).exists();
 
   /// 确保模型就绪（未下载则下载并等待完成）。
   ///
   /// 若已有文件但校验失败（损坏/不完整），先删除再重新下载。
-  Future<void> ensure(WhisperModel model) async {
+  Future<void> ensure(LocalModel model) async {
     final key = _key(model);
     if (states[key]?.state == ModelTaskState.done) {
       return;
@@ -291,7 +285,7 @@ class ModelManager {
     }
   }
 
-  void download(WhisperModel model) {
+  void download(LocalModel model) {
     final key = _key(model);
     final current = states[key];
     if (current?.state == ModelTaskState.downloading) {
@@ -300,7 +294,7 @@ class ModelManager {
     _run(model);
   }
 
-  Future<void> _run(WhisperModel model) async {
+  Future<void> _run(LocalModel model) async {
     final key = _key(model);
     final cancelToken = CancelToken();
     _cancelTokens[key] = cancelToken;
@@ -339,7 +333,7 @@ class ModelManager {
       // 模型走 HTTP/1.1 适配器：HF 下载是 302 跳转到 CDN，HTTP/2 适配器对
       // 流式请求的跳转支持不确定，用 h11 可确保跟随跳转拿到真实文件。
       final response = await Request.http11Dio.get<ResponseBody>(
-        model.modelUri.toString(),
+        model.url,
         cancelToken: cancelToken,
         options: Options(
           responseType: ResponseType.stream,
@@ -448,7 +442,7 @@ class ModelManager {
   }
 
   /// 暂停下载
-  void pause(WhisperModel model) {
+  void pause(LocalModel model) {
     final key = _key(model);
     final current = states[key];
     if (current?.state != ModelTaskState.downloading) {
@@ -470,7 +464,7 @@ class ModelManager {
   }
 
   /// 删除已下载的模型文件
-  Future<void> remove(WhisperModel model) async {
+  Future<void> remove(LocalModel model) async {
     final key = _key(model);
     pause(model);
     final file = File(await pathOf(model));
@@ -485,14 +479,14 @@ class ModelManager {
   }
 
   /// 删除并重新下载（用于文件损坏时）。
-  Future<void> redownload(WhisperModel model) async {
+  Future<void> redownload(LocalModel model) async {
     await remove(model);
     download(model);
   }
 
   /// 导出模型：返回模型文件路径（Android 上位于 Download/piliplus_models，
   /// 用户可直接访问/分享）；未下载返回 null。
-  Future<String?> exportModelPath(WhisperModel model) async {
+  Future<String?> exportModelPath(LocalModel model) async {
     final file = File(await pathOf(model));
     return await file.exists() ? file.path : null;
   }
@@ -500,10 +494,10 @@ class ModelManager {
   /// 导入模型：把 [sourceFile]（文件名须为 ggml-<name>.bin）复制到识别目录。
   ///
   /// 返回导入的模型；文件不匹配返回 null。
-  Future<WhisperModel?> importModel(File sourceFile) async {
+  Future<LocalModel?> importModel(File sourceFile) async {
     final name = p.basename(sourceFile.path);
     for (final model in managedModels) {
-      if ('ggml-${model.modelName}.bin' != name) {
+      if (model.fileName != name) {
         continue;
       }
       await _migrate(model);

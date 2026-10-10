@@ -6,6 +6,7 @@ import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/services/local_subtitle/incremental_recognizer.dart';
+import 'package:PiliPlus/services/local_subtitle/local_models.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/services/local_subtitle/model_manager.dart';
 import 'package:PiliPlus/services/local_subtitle/subtitle_debug_log.dart';
@@ -13,7 +14,6 @@ import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:whisper_ggml/whisper_ggml.dart';
 
 /// 增量字幕识别会话：绑定播放器，边播边识别、边注入字幕。
 class LiveSubtitleSession extends GetxController {
@@ -63,11 +63,11 @@ class LiveSubtitleSession extends GetxController {
 
   Stream<int> get positionStream => plPlayerController.position.stream;
 
-  WhisperModel get _model {
+  LocalModel get _model {
     final box = GStorage.setting;
     final index = box.get(SettingBoxKey.whisperModel, defaultValue: 1);
     final options = LocalSubtitleService.modelOptions;
-    return options[index.clamp(0, options.length - 1)].model;
+    return options[index.clamp(0, options.length - 1)];
   }
 
   bool get _bilingual =>
@@ -129,7 +129,7 @@ class LiveSubtitleSession extends GetxController {
     stage.value = '检查模型';
     SubtitleDebugLog.instance.log(
       '会话开始 ${audioFile != null ? 'file=$audioFile' : 'url=$url'} '
-      '模型=${_model.modelName} 双语=$_bilingual 跟随=$_followPlayback',
+      '模型=${_model.id} 双语=$_bilingual 跟随=$_followPlayback',
     );
     try {
       await _modelManager.ensure(_model);
@@ -140,7 +140,7 @@ class LiveSubtitleSession extends GetxController {
       SmartDialog.showToast('模型下载失败：$e');
       return;
     }
-    SubtitleDebugLog.instance.log('模型就绪：${_model.modelName}');
+    SubtitleDebugLog.instance.log('模型就绪：${_model.id}');
     if (_closed) {
       return;
     }
