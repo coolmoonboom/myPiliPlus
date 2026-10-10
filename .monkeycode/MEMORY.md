@@ -151,5 +151,16 @@ Entries discovered by the Agent during task execution should follow this format:
 - Category: Troubleshooting & Debugging
 - Instructions:
   - Flutter `Scrollable.ensureVisible(ctx, alignment: 0.5)` 会把 ctx 的**所有祖先滚动容器**一起滚动才能让目标可见。字幕页是外层 TabBarView（PageView）的一页，列表内调用它会连带把外层 PageView 翻回字幕 tab，即使用户正停在其他 tab 或面板被 keep-alive。
-  - 只想滚动内层列表时，改为直接操作该列表自己的 ScrollController：用 `row.localToGlobal(Offset.zero, ancestor: viewportRenderBox).dy` 求目标相对视口偏移，再 `position.animateTo/jumpTo`；viewport 取 `controller.position.context.findRenderObject()`。
-  - 用户手动滑动期间要临时屏蔽自动滚动（但保留高亮）：用 `NotificationListener<ScrollNotification>`，仅当 `notification.dragDetails != null`（用户拖动）时置截止时间；程序 animateTo/jumpTo 的 dragDetails 为 null，不会误判。
+  - 只想滚动内层列表时，改为直接操作该列表自己的 ScrollController，用 `RenderAbstractViewport.of(row).getOffsetToReveal(row, 0.5).offset` 求目标偏移再 `position.animateTo/jumpTo`（`ScrollPosition.context` 是 `ScrollContext`、并非 `BuildContext`，不能直接 `findRenderObject()`）。
+  - 用户手动滑动期间要临时屏蔽自动滚动（但保留高亮）：用 `NotificationListener<ScrollNotification>`；`dragDetails` 只定义在 `ScrollStart/ScrollUpdate/ScrollEndNotification` 子类上（基类 `ScrollNotification` 没有），靠它区分用户拖动与程序 animateTo/jumpTo。
+
+
+[双语翻译可走本地 Offline Translator 的 LibreTranslate 兼容服务]
+- Date: 2026-10-07
+- Context: Discovered by Agent while 把字幕双语翻译从在线改为本地（用户指定用开源项目 dev.davidv.translator）
+- Category: Operations & Deployment
+- Instructions:
+  - 「Offline Translator」（作者 David Ventura，仓库 github.com/DavidVentura/offline-translator，GPLv3，F-Droid 包名 dev.davidv.translator）内置「Enable LibreTranslate compatible HTTP server」，默认 `http://127.0.0.1:5000`、Bind on localhost，可被其它 App 本机调用做离线翻译（法↔简中等 61 种语言）。我们按 LibreTranslate 协议 POST，不复制其代码，无 GPL 传染。
+  - 本 App 的 `TranslationService`（lib/services/local_subtitle/subtitle_translator.dart）provider 有：glossary(0,在线优先)/http(1)/local(2,仅本地)/autoLocal(3,本地优先回退在线/词库，默认)。本地地址常量 `kOfflineTranslatorEndpoint=http://127.0.0.1:5000/translate`，设置键 `translationLocalEndpoint`。
+  - 关键实现点：LibreTranslate 响应是顶层 `translatedText`（MyMemory 才是 `responseData.translatedText`），解析需两者兼容；LibreTranslate 目标语言用 `zh`（MyMemory 要 `zh-CN`）。
+  - Android 明文：targetSdk 37 默认禁 cleartext，需 `android/app/src/main/res/xml/network_security_config.xml` 只放行 `127.0.0.1`/`localhost`，并在 AndroidManifest 的 `<application>` 加 `android:networkSecurityConfig`。

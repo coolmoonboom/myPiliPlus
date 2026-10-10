@@ -649,7 +649,17 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
   late final TextEditingController _apiKey = TextEditingController(
     text: setting.get(SettingBoxKey.translationApiKey) as String? ?? '',
   );
+  late final TextEditingController _localEndpoint = TextEditingController(
+    text: () {
+      final saved =
+          setting.get(SettingBoxKey.translationLocalEndpoint) as String?;
+      return (saved != null && saved.trim().isNotEmpty)
+          ? saved.trim()
+          : kOfflineTranslatorEndpoint;
+    }(),
+  );
   late TranslationProvider _provider = TranslationSettings.load().provider;
+  bool _probing = false;
 
   Box get setting => GStorage.setting;
 
@@ -657,6 +667,7 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
   void dispose() {
     _endpoint.dispose();
     _apiKey.dispose();
+    _localEndpoint.dispose();
     super.dispose();
   }
 
@@ -665,9 +676,25 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
       provider: _provider,
       endpoint: _endpoint.text.trim(),
       apiKey: _apiKey.text.trim(),
+      localEndpoint: _localEndpoint.text.trim(),
     ).save();
     SmartDialog.showToast('翻译设置已保存');
     Get.back();
+  }
+
+  Future<void> _probeLocal() async {
+    if (_probing) {
+      return;
+    }
+    setState(() => _probing = true);
+    final ok = await offlineTranslatorAvailable(endpoint: _localEndpoint.text);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _probing = false);
+    SmartDialog.showToast(
+      ok ? '本地 Offline Translator 服务在线' : '未检测到本地服务，请确认已开启其 HTTP server',
+    );
   }
 
   @override
@@ -695,12 +722,20 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
               value: _provider,
               items: const [
                 DropdownMenuItem(
+                  value: TranslationProvider.autoLocal,
+                  child: Text('自动：本地优先，离线回退在线接口'),
+                ),
+                DropdownMenuItem(
+                  value: TranslationProvider.local,
+                  child: Text('本地：Offline Translator（离线）'),
+                ),
+                DropdownMenuItem(
                   value: TranslationProvider.glossary,
                   child: Text('自动：在线翻译优先，离线词库兜底'),
                 ),
                 DropdownMenuItem(
                   value: TranslationProvider.http,
-                  child: Text('在线翻译接口'),
+                  child: Text('仅在线翻译接口'),
                 ),
               ],
               onChanged: (value) {
@@ -708,6 +743,36 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
                 setState(() => _provider = value);
               },
             ),
+            const SizedBox(height: 16),
+            Text('本地 Offline Translator', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              '需先安装并开启 Offline Translator 的「LibreTranslate compatible HTTP server」',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _localEndpoint,
+              decoration: InputDecoration(
+                labelText: '本地服务地址',
+                helperText: '默认 $kOfflineTranslatorEndpoint',
+                border: const OutlineInputBorder(),
+                suffixIcon: TextButton(
+                  onPressed: _probing ? null : _probeLocal,
+                  child: _probing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('检测'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('在线翻译接口', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
             TextField(
               controller: _endpoint,

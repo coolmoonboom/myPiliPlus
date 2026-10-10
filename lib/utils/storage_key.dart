@@ -188,7 +188,8 @@ abstract final class SettingBoxKey {
       whisperFollowPlayback = 'whisperFollowPlayback',
       translationProvider = 'translationProvider',
       translationEndpoint = 'translationEndpoint',
-      translationApiKey = 'translationApiKey';
+      translationApiKey = 'translationApiKey',
+      translationLocalEndpoint = 'translationLocalEndpoint';
 
   static const String enableSponsorBlock = 'enableSponsorBlock',
       blockSettings = 'blockSettings',

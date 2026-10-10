@@ -23,13 +23,26 @@ enum TranslationProvider {
 
   /// 仅在线翻译接口
   http,
+
+  /// 仅本地 Offline Translator（dev.davidv.translator 的 LibreTranslate 兼容服务），词库兜底
+  local,
+
+  /// 自动：本地 Offline Translator 优先，离线时回退在线接口/词库
+  autoLocal,
 }
+
+/// 本地 Offline Translator 的 LibreTranslate 兼容服务默认地址。
+///
+/// 在 Offline Translator 设置里开启「Enable LibreTranslate compatible HTTP server」
+/// （默认 Port 5000、Bind on localhost）即可离线翻译，无需联网。
+const String kOfflineTranslatorEndpoint = 'http://127.0.0.1:5000/translate';
 
 class TranslationSettings {
   const TranslationSettings({
     required this.provider,
     this.endpoint,
     this.apiKey,
+    this.localEndpoint,
   });
 
   final TranslationProvider provider;
@@ -39,14 +52,21 @@ class TranslationSettings {
 
   final String? apiKey;
 
+  /// 本地 Offline Translator 服务地址。为空时使用 [kOfflineTranslatorEndpoint]。
+  final String? localEndpoint;
+
   static TranslationSettings load() {
     final box = GStorage.setting;
-    final index = box.get(SettingBoxKey.translationProvider, defaultValue: 0);
+    final index = box.get(
+      SettingBoxKey.translationProvider,
+      defaultValue: TranslationProvider.autoLocal.index,
+    );
     return TranslationSettings(
       provider: TranslationProvider.values[
           index.clamp(0, TranslationProvider.values.length - 1)],
       endpoint: box.get(SettingBoxKey.translationEndpoint) as String?,
       apiKey: box.get(SettingBoxKey.translationApiKey) as String?,
+      localEndpoint: box.get(SettingBoxKey.translationLocalEndpoint) as String?,
     );
   }
 
@@ -55,51 +75,86 @@ class TranslationSettings {
     box.put(SettingBoxKey.translationProvider, provider.index);
     box.put(SettingBoxKey.translationEndpoint, endpoint);
     box.put(SettingBoxKey.translationApiKey, apiKey);
+    box.put(SettingBoxKey.translationLocalEndpoint, localEndpoint);
   }
 }
 
 abstract final class TranslationService {
-  /// 根据设置创建翻译器；默认「在线优先 + 本地词库兜底」。
+  /// 根据设置创建翻译器。
+  ///
+  /// - 默认「自动：本地 Offline Translator 优先，离线回退在线接口/词库」。
+  /// - 本地走 Offline Translator 的 LibreTranslate 兼容服务（见 [kOfflineTranslatorEndpoint]）。
   static SubtitleTranslator create([TranslationSettings? settings]) {
     final config = settings ?? TranslationSettings.load();
-    if (config.provider == TranslationProvider.glossary) {
-      return _FallbackTranslator(
-        primary: HttpSubtitleTranslator(
-          endpoint: config.endpoint,
-          apiKey: config.apiKey,
-        ),
-        fallback: GlossaryTranslator(),
-      );
-    }
-    return HttpSubtitleTranslator(
+    final online = HttpSubtitleTranslator(
       endpoint: config.endpoint,
       apiKey: config.apiKey,
     );
+    final local = HttpSubtitleTranslator(
+      endpoint: config.localEndpoint?.trim().isNotEmpty ?? false
+          ? config.localEndpoint!.trim()
+          : kOfflineTranslatorEndpoint,
+      // 本地服务要么秒连上、要么拒绝连接，超时设短以免拖慢在线回退。
+      connectTimeout: const Duration(milliseconds: 900),
+    );
+    return switch (config.provider) {
+      TranslationProvider.http => online,
+      TranslationProvider.local => _ChainTranslator([local, GlossaryTranslator()]),
+      TranslationProvider.autoLocal => _ChainTranslator([
+        local,
+        online,
+        GlossaryTranslator(),
+      ]),
+      TranslationProvider.glossary => _ChainTranslator([
+        online,
+        GlossaryTranslator(),
+      ]),
+    };
   }
 }
 
-/// 当主翻译器失败或未产出有效结果时回退到 [fallback]。
-class _FallbackTranslator implements SubtitleTranslator {
-  _FallbackTranslator({required this.primary, required this.fallback});
+/// 依次尝试各个翻译器，返回第一个有效结果（非空且与原文不同）；
+/// 全部失败时返回原文。
+class _ChainTranslator implements SubtitleTranslator {
+  _ChainTranslator(this.translators);
 
-  final SubtitleTranslator primary;
-  final SubtitleTranslator fallback;
+  final List<SubtitleTranslator> translators;
 
   @override
   Future<String> translate(String text, {String from = 'fr', String to = 'zh'}) async {
-    try {
-      final result = await primary.translate(text, from: from, to: to);
-      if (result.trim().isNotEmpty && result.trim() != text.trim()) {
-        return result;
+    final source = text.trim();
+    for (final translator in translators) {
+      try {
+        final result = await translator.translate(text, from: from, to: to);
+        final value = result.trim();
+        if (value.isNotEmpty && value != source) {
+          return result;
+        }
+      } catch (_) {
+        // 继续尝试下一个
       }
-    } catch (_) {
-      // ignore and fall through to fallback
     }
-    try {
-      return await fallback.translate(text, from: from, to: to);
-    } catch (_) {
-      return text;
-    }
+    return text;
+  }
+}
+
+/// 探测本地 Offline Translator（LibreTranslate 兼容服务）是否可用。
+Future<bool> offlineTranslatorAvailable({String? endpoint}) async {
+  final url = endpoint?.trim().isNotEmpty ?? false
+      ? endpoint!.trim()
+      : kOfflineTranslatorEndpoint;
+  try {
+    final res = await Request.dio.post(
+      url,
+      data: {'q': 'ok', 'source': 'en', 'target': 'zh', 'format': 'text'},
+      options: Options(
+        connectTimeout: const Duration(milliseconds: 1200),
+        receiveTimeout: const Duration(seconds: 4),
+      ),
+    );
+    return _extractTranslatedText(res.data) != null;
+  } catch (_) {
+    return false;
   }
 }
 
@@ -265,15 +320,27 @@ class GlossaryTranslator implements SubtitleTranslator {
   };
 }
 
-/// 在线翻译器。
+/// 在线/本地翻译器。
 ///
-/// - [endpoint] 为空时使用 MyMemory 免费接口（无需 key）。
-/// - 提供 [endpoint] 时按 LibreTranslate 兼容协议 POST JSON。
+/// - [endpoint] 为空时使用 MyMemory 免费接口（无需 key），目标语言用 `zh-CN`。
+/// - 提供 [endpoint] 时按 LibreTranslate 兼容协议 POST JSON
+///   （MyMemory 之外的接口、以及本地 Offline Translator 都走这里），目标语言用 `zh`。
+/// - 响应同时兼容 LibreTranslate 顶层 `translatedText` 与 MyMemory 的
+///   `responseData.translatedText`。
 class HttpSubtitleTranslator implements SubtitleTranslator {
-  HttpSubtitleTranslator({this.endpoint, this.apiKey});
+  HttpSubtitleTranslator({
+    this.endpoint,
+    this.apiKey,
+    this.connectTimeout = const Duration(seconds: 6),
+    this.receiveTimeout = const Duration(seconds: 8),
+  });
 
   final String? endpoint;
   final String? apiKey;
+  final Duration connectTimeout;
+  final Duration receiveTimeout;
+
+  bool get _useMyMemory => endpoint == null || endpoint!.isEmpty;
 
   @override
   Future<String> translate(
@@ -285,62 +352,40 @@ class HttpSubtitleTranslator implements SubtitleTranslator {
     if (value.isEmpty) {
       return value;
     }
-    final target = _normalizeTarget(to);
     try {
-      if (endpoint == null || endpoint!.isEmpty) {
-        final res = await Request.dio.get(
+      final Response res;
+      if (_useMyMemory) {
+        res = await Request.dio.get(
           'https://api.mymemory.translated.net/get',
           queryParameters: {
             'q': value,
-            'langpair': '$from|$target',
+            'langpair': '$from|${_normalizeTarget(to)}',
           },
           options: Options(
-            connectTimeout: const Duration(seconds: 6),
-            receiveTimeout: const Duration(seconds: 8),
+            connectTimeout: connectTimeout,
+            receiveTimeout: receiveTimeout,
           ),
         );
-        final data = res.data;
-          if (data is Map) {
-            final rd = data['responseData'];
-            if (rd is Map) {
-              final translated = rd['translatedText']?.toString().trim();
-              if (translated != null && translated.isNotEmpty) {
-                return translated;
-              }
-            }
-          }
-          return value;
+      } else {
+        res = await Request.dio.post(
+          endpoint!,
+          data: {
+            'q': value,
+            'source': from,
+            // LibreTranslate 标准用 zh（而非 zh-CN）。
+            'target': to,
+            'format': 'text',
+            if (apiKey != null && apiKey!.isNotEmpty) 'api_key': apiKey,
+          },
+          options: Options(
+            connectTimeout: connectTimeout,
+            receiveTimeout: receiveTimeout,
+          ),
+        );
       }
-
-      final res = await Request.dio.post(
-        endpoint!,
-        data: {
-          'q': value,
-          'source': from,
-          'target': target,
-          'format': 'text',
-          if (apiKey != null && apiKey!.isNotEmpty) 'api_key': apiKey,
-        },
-        options: Options(
-          connectTimeout: const Duration(seconds: 6),
-          receiveTimeout: const Duration(seconds: 8),
-        ),
-      );
-final data = res.data;
-        if (data is Map) {
-          final rd = data['responseData'];
-          if (rd is Map) {
-            final translated = rd['translatedText']?.toString().trim();
-            if (translated != null && translated.isNotEmpty) {
-              return translated;
-            }
-          }
-        }
-        return value;
+      return _extractTranslatedText(res.data) ?? value;
     } catch (e) {
-      SubtitleDebugLog.instance.log(
-        '在线翻译失败（回退词库）：$value => $e',
-      );
+      SubtitleDebugLog.instance.log('在线翻译失败（回退词库）：$value => $e');
       return value;
     }
   }
@@ -355,4 +400,24 @@ final data = res.data;
         return to;
     }
   }
+}
+
+/// 从翻译响应里提取译文：兼容 LibreTranslate 顶层 `translatedText`
+/// 与 MyMemory 的 `responseData.translatedText`。
+String? _extractTranslatedText(dynamic data) {
+  if (data is! Map) {
+    return null;
+  }
+  final top = data['translatedText'];
+  if (top is String && top.trim().isNotEmpty) {
+    return top.trim();
+  }
+  final rd = data['responseData'];
+  if (rd is Map) {
+    final t = rd['translatedText'];
+    if (t is String && t.trim().isNotEmpty) {
+      return t.trim();
+    }
+  }
+  return null;
 }
