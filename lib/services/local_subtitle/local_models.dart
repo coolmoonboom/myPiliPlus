@@ -51,6 +51,14 @@ class LocalModel {
 const String _hfBase =
     'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/';
 
+const LocalModel _baseModel = LocalModel(
+  id: 'base',
+  label: 'base (推荐, 约140MB)',
+  url: '${_hfBase}ggml-base.bin',
+  expectedBytes: 147951465,
+  arch: WhisperModel.base,
+);
+
 /// 全部可选识别模型。索引顺序即设置项的持久化顺序，
 /// 新增模型只能追加，避免已有用户的选择被错位。
 const List<LocalModel> kLocalModels = [
@@ -61,13 +69,7 @@ const List<LocalModel> kLocalModels = [
     expectedBytes: 77691713,
     arch: WhisperModel.tiny,
   ),
-  LocalModel(
-    id: 'base',
-    label: 'base (推荐, 约140MB)',
-    url: '${_hfBase}ggml-base.bin',
-    expectedBytes: 147951465,
-    arch: WhisperModel.base,
-  ),
+  _baseModel,
   LocalModel(
     id: 'small',
     label: 'small (更准, 约460MB)',
@@ -124,7 +126,7 @@ const List<LocalModel> kLocalModels = [
 ];
 
 /// 默认模型（base）。
-const LocalModel kDefaultLocalModel = kLocalModels[1];
+const LocalModel kDefaultLocalModel = _baseModel;
 
 /// 按 id 查找模型，找不到返回 null。
 LocalModel? localModelById(String id) {
