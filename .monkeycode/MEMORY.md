@@ -37,7 +37,7 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 本仓库是 fork，origin 为 coolmoonboom/myPiliPlus（无上游 bggRGjQaUbCoE/PiliPlus 写权限）。
   - 发布流程：推 main 到 origin 后执行 `gh workflow run 335279958 --repo coolmoonboom/myPiliPlus --ref main -f build_android=true -f build_ios=false -f build_mac=false -f build_win_x64=false -f build_linux_x64=false -f tag=<版本>`。
-  - build.yml 的 android job 在 workflow_dispatch 且 tag 非空时，自动用 softprops/action-gh-release 创建 Release 并上传三个 ABI 的 APK。
+  - build.yml 的 android job 在 workflow_dispatch 且 tag 非空时，自动用 softprops/action-gh-release 创建 Release 并上传 APK。用户要求自 2026-10-10 起只发布 arm64-v8a（armv8）：构建命令为 `flutter build apk --release --split-per-abi --target-platform android-arm64`，产物仅 app-arm64-v8a-release.apk（Rename 步骤能正确解析出 arm64-v8a）。
   - 未配置 SIGN_KEYSTORE_BASE64 等 secrets 时，release APK 回退 debug 签名（android/app/build.gradle.kts 中 signingConfig = config ?: signingConfigs["debug"]），可安装但非正式发布签名。
   - 版本号由 lib/scripts/build.ps1 基于 commit 数自动生成，pubspec 的 version 仅作前缀。
   - git push 到 GitHub 偶发 `RPC failed; HTTP 408` / `send-pack: unexpected disconnect`，重试仍失败时加 `git -c http.version=HTTP/1.1 -c http.postBuffer=52428800 push <url> main` 可成功（勿写坏本地 git config）。
