@@ -177,7 +177,7 @@ class IncrementalRecognizer extends GetxController {
       _pendingRestart = true;
       _cancelled = true;
       _cancelToken?.cancel('restart requested');
-      status.value = '正在切换到新的识别队列…';
+      status.value = '正在切换识别队列，等待当前片段结束…';
       SubtitleDebugLog.instance.log('重复启动请求：标记 pendingRestart');
       return;
     }
@@ -677,13 +677,16 @@ class IncrementalRecognizer extends GetxController {
       '模型=${model?.id ?? 'base'}',
     );
     // 心跳：转写进度回调粒度很粗（首尾才更新），期间显示已耗时秒数，
-    // 让用户看到识别在进行中，而不是误以为卡在 0%
+    // 让用户看到识别在进行中，而不是误以为卡在 0%。
+    // 注意：原生转写无法中断，停止/切换后本段仍会跑完；此时必须继续刷新计时，
+    // 否则状态会一直停在「正在切换到新的识别队列…」上，看起来像卡死。
     var pct = -1;
     final ticker = Timer.periodic(const Duration(seconds: 2), (_) {
+      final sec = DateTime.now().difference(startedAt).inSeconds;
       if (_cancelled) {
+        status.value = '正在结束当前片段…（已用${sec}s）';
         return;
       }
-      final sec = DateTime.now().difference(startedAt).inSeconds;
       status.value = pct >= 0
           ? '识别 ${_fmt(s0)} ${pct}% 已用${sec}s'
           : '识别 ${_fmt(s0)} 已用${sec}s 出结果稍候';
