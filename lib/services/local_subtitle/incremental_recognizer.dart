@@ -85,9 +85,7 @@ class IncrementalRecognizer extends GetxController {
       _settledBlocks.clear();
       _blockTries.clear();
       coverage.clear();
-      SubtitleDebugLog.instance.log(
-        '识别模型切换，块长 $oldBlock→$newBlock 秒，已重置块进度',
-      );
+      SubtitleDebugLog.instance.log('识别模型切换，块长 $oldBlock→$newBlock 秒，已重置块进度');
     }
   }
 
@@ -129,6 +127,29 @@ class IncrementalRecognizer extends GetxController {
 
   /// 单块最多尝试次数，超过则跳过该块（避免无限重试卡住队列）
   static const int _maxTriesPerBlock = 3;
+
+  /// 单段转写看门狗时长按模型自适应：大模型（large-v3/turbo，575MB~3GB）首次
+  /// 转写包含模型加载，手机上远慢于小模型；沿用小模型的固定值会把大模型
+  /// 「首块必超时」误判为挂起，进而连环失败（现象：换了 turbo 全程没有字幕）。
+  static Duration _timeoutFor(LocalModel? m) {
+    switch (m?.arch) {
+      case WhisperModel.tiny:
+        return const Duration(seconds: 150);
+      case WhisperModel.medium:
+        return const Duration(seconds: 480);
+      case WhisperModel.large:
+        return const Duration(seconds: 600);
+      default:
+        return const Duration(seconds: 240);
+    }
+  }
+
+  /// 曾经超时、但原生侧仍在运行（无法中断）的转写 Future。
+  ///
+  /// 下一块开始前必须先等它收尾：原生转写跑完会把模型驻留
+  /// （keepModelLoaded），后续块即可直接复用；若不等就发新请求，
+  /// 等于并发加载两份大模型，内存/CPU 双份开销会把之后所有块全部拖超时。
+  Future<WhisperTranscribeResponse?>? _zombieRun;
 
   /// 已完成/已跳过的块号
   final Set<int> _settledBlocks = {};
@@ -662,12 +683,42 @@ class IncrementalRecognizer extends GetxController {
     return _append(segments, abs);
   }
 
+  /// 等待超时后仍在原生侧运行的转写收尾（最多再等 [_timeoutFor] 的 1.5 倍）。
+  ///
+  /// 原生转写无法中断；等它跑完，模型会被 keepModelLoaded 驻留，下一块直接
+  /// 复用。这里只是不让新请求与它并发，超时未等到也照常继续（宁可慢不卡死）。
+  Future<void> _awaitZombie() async {
+    final zombie = _zombieRun;
+    if (zombie == null) {
+      return;
+    }
+    if (_cancelled) {
+      _zombieRun = null;
+      return;
+    }
+    status.value = '上一个片段仍在收尾…';
+    SubtitleDebugLog.instance.log('等待超时片段的原生转写收尾…');
+    final wait = _timeoutFor(model) * 1.5;
+    try {
+      await zombie.timeout(wait);
+      SubtitleDebugLog.instance.log('僵尸转写已收尾，模型驻留可复用');
+    } catch (_) {
+      SubtitleDebugLog.instance.log('僵尸转写 ${wait.inSeconds}s 内未结束，继续下一段');
+    }
+    if (identical(_zombieRun, zombie)) {
+      _zombieRun = null;
+    }
+  }
+
   /// 转写一段音频文件，返回绝对时间的分段列表
   Future<List<LocalSubtitleSegment>> _transcribeChunk(
     int s0,
     Uint8List data,
     double t0,
   ) async {
+    // 上一段若超时，其原生转写仍在跑。大模型并发加载两份会互相拖垮，
+    // 先等它收尾（结束后模型驻留，本段可直接复用，免二次加载）。
+    await _awaitZombie();
     final tempDir = await getTemporaryDirectory();
     final filePath = path.join(tempDir.path, 'asr_chunk.m4a');
     final file = await File(filePath).writeAsBytes(data);
@@ -692,26 +743,38 @@ class IncrementalRecognizer extends GetxController {
           : '识别 ${_fmt(s0)} 已用${sec}s 出结果稍候';
     });
     late final WhisperTranscribeResponse? result;
+    final timeout = _timeoutFor(model);
+    final run = LocalSubtitleService.transcribeWithModel(
+      model: model ?? kDefaultLocalModel,
+      audioPath: file.path,
+      lang: 'fr',
+      withSegments: true,
+      noContext: true,
+      suppressNonSpeechTokens: true,
+      keepModelLoaded: true,
+      onProgress: (p) {
+        pct = p;
+      },
+    );
+    _zombieRun = run;
+    var timedOut = false;
     try {
-      // 看门狗：单段转写超过 4 分钟视为挂起，按失败跳过，绝不永久卡住
-      result = await LocalSubtitleService.transcribeWithModel(
-        model: model ?? kDefaultLocalModel,
-        audioPath: file.path,
-        lang: 'fr',
-        withSegments: true,
-        noContext: true,
-        suppressNonSpeechTokens: true,
-        keepModelLoaded: true,
-        onProgress: (p) {
-          pct = p;
-        },
-      ).timeout(const Duration(seconds: 240));
+      // 看门狗：超过模型自适应时限视为挂起，按失败跳过，绝不永久卡住
+      result = await run.timeout(timeout);
     } on TimeoutException {
+      timedOut = true;
       result = null;
       LocalSubtitleService.lastTranscribeError = 'timeout';
-      SubtitleDebugLog.instance.log('转写超时 s0=$s0（>240s），跳过该段');
+      SubtitleDebugLog.instance.log(
+        '转写超时 s0=$s0（>${timeout.inSeconds}s），跳过该段；'
+        '原生转写无法中断，留它在后台跑完并驻留模型',
+      );
     } finally {
       ticker.cancel();
+      if (!timedOut) {
+        // 请求已终结（成功或抛错返回 null），不再是僵尸
+        _zombieRun = null;
+      }
     }
     final cost = DateTime.now().difference(startedAt).inMilliseconds;
     if (result == null) {
@@ -721,12 +784,18 @@ class IncrementalRecognizer extends GetxController {
       SubtitleDebugLog.instance.log(
         '转写失败 s0=$s0 连续=$_consecutiveFailures 模型问题=$isModelIssue',
       );
-      if (_consecutiveFailures >= 3) {
-        throw Exception(
-          isModelIssue ? '模型加载失败，请在设置中删除并重新下载识别模型' : '连续转写失败，请查看调试日志',
-        );
+      if (isModelIssue || _consecutiveFailures >= 3) {
+        // 模型加载失败重试也不会变好，直接终止给出明确指引；
+        // 其余连续失败给 3 次机会再放弃。
+        final brief = err.split('\n').first;
+        final hint = timedOut
+            ? '${model?.label ?? '当前模型'} 在本机太慢，建议换更小的模型'
+            : '连续转写失败：${brief.length > 120 ? brief.substring(0, 120) : brief}，详见调试日志';
+        throw Exception(isModelIssue ? '模型加载失败，请在设置中删除并重新下载识别模型' : hint);
       }
-      status.value = isModelIssue ? '模型加载失败，见调试日志' : '转写失败，见调试日志';
+      status.value = isModelIssue
+          ? '模型加载失败，见调试日志'
+          : (timedOut ? '该段转写超时已跳过（模型在本机偏慢）' : '转写失败，见调试日志');
       return const [];
     }
     _consecutiveFailures = 0;
