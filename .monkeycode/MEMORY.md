@@ -155,6 +155,16 @@ Entries discovered by the Agent during task execution should follow this format:
   - 用户手动滑动期间要临时屏蔽自动滚动（但保留高亮）：用 `NotificationListener<ScrollNotification>`；`dragDetails` 只定义在 `ScrollStart/ScrollUpdate/ScrollEndNotification` 子类上（基类 `ScrollNotification` 没有），靠它区分用户拖动与程序 animateTo/jumpTo。
 
 
+[大模型(turbo/large)识别连环超时的成因与看门狗设计]
+- Date: 2026-10-11
+- Context: Discovered by Agent while 修复「选 large-v3-turbo 不生效、没有字幕」
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - whisper_ggml 原生转写不可中断：Dart 侧 `.timeout()` 只放弃等待，原生 isolate 仍在跑并会占模型/内存。
+  - 大模型（turbo 575MB+/large 3GB）首块转写包含模型加载，固定 240s 看门狗会「首块必超时」；随后新请求与僵尸转写并发，双份大模型加载把所有后续块拖超时（3 连败后全程无字幕）。base 等小模型快，触发不了。
+  - 正确设计：看门狗按 arch 自适应（tiny 150s / small·base 240s / medium 480s / large 600s）；下一块前必须 await 僵尸 Future（完成后 keepModelLoaded 会驻留模型，下一块免二次加载）；native 报 failed to load model 时立即终止不重试。
+  - 模型文件侧无需担心：HF ggerganov/whisper.cpp 的 turbo/量化文件是 legacy GGML 魔数(6c6d6767)，whisper_ggml 2.6+ 内置 whisper.cpp v1.9.1 支持 turbo；插件 transcribe 按 modelPath 加载，WhisperModel 枚举只是占位。
+
 [双语翻译可走本地 Offline Translator 的 LibreTranslate 兼容服务]
 - Date: 2026-10-07
 - Context: Discovered by Agent while 把字幕双语翻译从在线改为本地（用户指定用开源项目 dev.davidv.translator）
