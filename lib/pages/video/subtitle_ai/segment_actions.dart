@@ -1,16 +1,22 @@
+import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/pages/video/subtitle_ai/settings_sheet.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// 长按字幕单条后的操作：在此定轴、复制、修改或循环该句。
+/// 长按字幕单条后的操作：在此定轴、复制、修改或循环该句；
+/// 传入识别相关回调时（识别结果列表）追加「重新识别」类操作。
 Future<void>? showSegmentActions(
   BuildContext context, {
   required PlPlayerController playerController,
   required LocalSubtitleSegment segment,
   required Future<void> Function(String text, String? translated) onEdit,
+  void Function()? onRetranscribe,
+  void Function()? onRetranscribeFrom,
+  void Function()? onClearAll,
 }) {
   return showSubtitleBottomSheet(
     context,
@@ -19,6 +25,9 @@ Future<void>? showSegmentActions(
       playerController: playerController,
       segment: segment,
       onEdit: onEdit,
+      onRetranscribe: onRetranscribe,
+      onRetranscribeFrom: onRetranscribeFrom,
+      onClearAll: onClearAll,
     ),
   );
 }
@@ -28,11 +37,23 @@ class _SegmentActionSheet extends StatelessWidget {
     required this.playerController,
     required this.segment,
     required this.onEdit,
+    this.onRetranscribe,
+    this.onRetranscribeFrom,
+    this.onClearAll,
   });
 
   final PlPlayerController playerController;
   final LocalSubtitleSegment segment;
   final Future<void> Function(String text, String? translated) onEdit;
+
+  /// 「重新识别该句」：仅识别出的字幕列表提供。
+  final void Function()? onRetranscribe;
+
+  /// 「从此处开始重新识别」：仅识别出的字幕列表提供。
+  final void Function()? onRetranscribeFrom;
+
+  /// 「清除识别结果」：清空本视频全部识别结果（含存档）。
+  final void Function()? onClearAll;
 
   String get _copyText {
     final translated = segment.translated;
@@ -56,6 +77,35 @@ class _SegmentActionSheet extends StatelessWidget {
       ..subtitleOffsetEnabled = true
       ..applySubtitleDelay();
     SmartDialog.showToast('已在此定轴');
+  }
+
+  /// 清除全部识别结果是破坏性操作，先弹确认。
+  void _confirmClearAll(BuildContext context) {
+    Navigator.of(context).maybePop();
+    showDialog(
+      context: Get.context!,
+      builder: (dialogContext) => AlertDialog(
+        constraints: Style.dialogFixedConstraints,
+        title: const Text('清除识别结果'),
+        content: const Text('将清空本视频全部已识别字幕（含本地存档），确定？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).maybePop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).maybePop();
+              onClearAll?.call();
+            },
+            child: Text(
+              '清除',
+              style: TextStyle(color: Theme.of(Get.context!).colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -121,6 +171,49 @@ class _SegmentActionSheet extends StatelessWidget {
               SmartDialog.showToast('已循环播放该句');
             },
           ),
+          if (onRetranscribe != null)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.refresh, size: 20),
+              title: const Text('重新识别该句'),
+              subtitle: const Text('重新识别这句所在的音频块，用新结果替换旧结果'),
+              onTap: () {
+                Navigator.of(context).maybePop();
+                onRetranscribe?.call();
+                SmartDialog.showToast(
+                  '已安排重新识别 ${_fmtTime(segment.from + _delay)} 附近',
+                );
+              },
+            ),
+          if (onRetranscribeFrom != null)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.fast_forward_outlined, size: 20),
+              title: const Text('从此处开始重新识别'),
+              subtitle: const Text('删除这句（含）及之后的旧结果，从这里重新识别'),
+              onTap: () {
+                Navigator.of(context).maybePop();
+                onRetranscribeFrom?.call();
+                SmartDialog.showToast(
+                  '已清除 ${_fmtTime(segment.from + _delay)} 之后的结果，正在重新识别',
+                );
+              },
+            ),
+          if (onClearAll != null)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                Icons.delete_outline,
+                size: 20,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              title: Text(
+                '清除识别结果',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              subtitle: const Text('清空本视频全部已识别字幕（含本地存档）'),
+              onTap: () => _confirmClearAll(context),
+            ),
         ],
       ),
     );

@@ -4,6 +4,7 @@ import 'package:PiliPlus/services/local_subtitle/live_subtitle_session.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
 import 'package:get/get.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/pages/video/subtitle_ai/segment_actions.dart';
@@ -171,6 +172,24 @@ class _SubtitleAiPanelState extends State<SubtitleAiPanel> {
                           translated: translated,
                         ),
                       ),
+                      onRetranscribe: () {
+                        if (!session.retranscribeSegment(seg)) {
+                          SmartDialog.showToast('请先开始识别字幕，再重新识别单句');
+                          return;
+                        }
+                        ctr.persistSubtitleArchive();
+                      },
+                      onRetranscribeFrom: () {
+                        if (!session.retranscribeFrom(seg)) {
+                          SmartDialog.showToast('请先开始识别字幕，再从此处重新识别');
+                          return;
+                        }
+                        ctr.persistSubtitleArchive();
+                      },
+                      onClearAll: () {
+                        ctr.clearRecognizedSubtitles();
+                        SmartDialog.showToast('已清除全部识别结果');
+                      },
                     ),
                   ),
           ),
@@ -205,6 +224,7 @@ class _SubtitleListState extends State<_SubtitleList> {
   int _lastActive = -2;
   bool _hasPositioned = false;
   bool _wasDragging = false;
+
   /// 用户手动滑动列表后，在此时间点之前暂停自动滚动（高亮不受影响）。
   DateTime? _userScrollUntil;
 
@@ -377,10 +397,7 @@ class _SubtitleListState extends State<_SubtitleList> {
                   ? null
                   : () => widget.onLongPress!(seg),
               child: Container(
-                margin: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 2,
-                ),
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
                   vertical: 8,
@@ -477,7 +494,8 @@ class _CoverageBar extends StatelessWidget {
                 for (final r in ranges)
                   Positioned(
                     left: (r.fromSeconds / total).clamp(0.0, 1.0) * w,
-                    width: ((r.toSeconds - r.fromSeconds) / total).clamp(
+                    width:
+                        ((r.toSeconds - r.fromSeconds) / total).clamp(
                           0.0,
                           1.0,
                         ) *
@@ -486,7 +504,9 @@ class _CoverageBar extends StatelessWidget {
                     bottom: 0,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.primary.withValues(alpha: 0.65),
+                        color: theme.colorScheme.primary.withValues(
+                          alpha: 0.65,
+                        ),
                       ),
                     ),
                   ),

@@ -87,11 +87,13 @@ class ModelManager {
     if (head.length < 4) {
       return false;
     }
-    final ggml = head[0] == _ggmlMagic[0] &&
+    final ggml =
+        head[0] == _ggmlMagic[0] &&
         head[1] == _ggmlMagic[1] &&
         head[2] == _ggmlMagic[2] &&
         head[3] == _ggmlMagic[3];
-    final gguf = head[0] == _ggufMagic[0] &&
+    final gguf =
+        head[0] == _ggufMagic[0] &&
         head[1] == _ggufMagic[1] &&
         head[2] == _ggufMagic[2] &&
         head[3] == _ggufMagic[3];
@@ -102,10 +104,7 @@ class ModelManager {
     if (head.length < 4) {
       return null;
     }
-    return head
-        .take(4)
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
+    return head.take(4).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
   /// 仅检查文件头魔数（用于断点续传的 `.part` 前缀文件）。
@@ -493,7 +492,9 @@ class ModelManager {
 
   /// 导入模型：把 [sourceFile]（文件名须为 ggml-<name>.bin）复制到识别目录。
   ///
-  /// 返回导入的模型；文件不匹配返回 null。
+  /// 返回导入的模型；文件名不匹配或内容无效返回 null。
+  /// 源文件本身就在模型目录时（用户直接放进去的）不复制、原地校验，
+  /// 且失败时绝不删除——那是用户的原始文件，copy 到自身会先截断清零。
   Future<LocalModel?> importModel(File sourceFile) async {
     final name = p.basename(sourceFile.path);
     for (final model in managedModels) {
@@ -502,21 +503,58 @@ class ModelManager {
       }
       await _migrate(model);
       final target = await pathOf(model);
-      await sourceFile.copy(target);
+      final inPlace = _samePath(sourceFile.path, target);
+      if (!inPlace) {
+        await sourceFile.copy(target);
+      }
       if (!await _isValidModelFile(
         File(target),
         minBytes: _minExpectedBytes(model),
       )) {
-        // 导入的并不是有效模型文件，清理并报告失败
-        try {
-          await File(target).delete();
-        } catch (_) {}
+        if (!inPlace) {
+          // 复制来的副本无效才清理；用户原文件与他人文件绝不删
+          try {
+            await File(target).delete();
+          } catch (_) {}
+        }
         return null;
       }
       states[_key(model)] = ModelState.downloaded;
       return model;
     }
     return null;
+  }
+
+  bool _samePath(String a, String b) {
+    try {
+      return p.equals(p.canonicalize(a), p.canonicalize(b));
+    } catch (_) {
+      return p.equals(p.normalize(a), p.normalize(b));
+    }
+  }
+
+  /// 重新扫描模型目录并刷新状态。
+  ///
+  /// 用户可能在 App 运行期间手动把 ggml-*.bin 放进模型目录，
+  /// 打开设置或导入面板时调用，让它直接显示为「已下载」。
+  Future<void> refresh() async {
+    for (final model in managedModels) {
+      final key = _key(model);
+      if (_cancelTokens.containsKey(key)) {
+        continue; // 正在下载的不打扰
+      }
+      final v = await validate(model);
+      if (!v.exists) {
+        states.remove(key);
+        continue;
+      }
+      states[key] = v.valid
+          ? ModelState.downloaded
+          : const ModelState(
+              state: ModelTaskState.corrupt,
+              error: '模型文件损坏或不完整，请重新下载',
+            );
+    }
   }
 
   /// 扫描 Download 及模型目录下的 ggml-*.bin 文件，作为可导入的候选。

@@ -1141,14 +1141,7 @@ class VideoDetailController extends GetxController
     try {
       final result = await FilePicker.pickFile(
         type: FileType.custom,
-        allowedExtensions: const [
-          'json',
-          'vtt',
-          'srt',
-          'ass',
-          'bcc',
-          'zip',
-        ],
+        allowedExtensions: const ['json', 'vtt', 'srt', 'ass', 'bcc', 'zip'],
       );
       if (result == null) {
         return;
@@ -1245,9 +1238,10 @@ class VideoDetailController extends GetxController
   /// 存档用的视频标题，取不到时回退到 BV 号。
   String get _archiveTitle {
     try {
-      final t = Get.find<UgcIntroController>(
-        tag: heroTag,
-      ).videoDetail.value.title;
+      final t = Get.find<UgcIntroController>(tag: heroTag)
+          .videoDetail
+          .value
+          .title;
       if (t != null && t.isNotEmpty) {
         return t;
       }
@@ -1326,6 +1320,12 @@ class VideoDetailController extends GetxController
       return;
     }
     await SubtitleArchiveStore.saveToCache(archive);
+  }
+
+  /// 长按菜单「清除识别结果」：清空本视频全部识别结果（含内存、注入轨与存档缓存）。
+  Future<void> clearRecognizedSubtitles() async {
+    await liveSubtitleSession.clearAllResults();
+    await SubtitleArchiveStore.deleteCache(bvid, cid.value);
   }
 
   /// 立即把当前字幕存档写入应用内缓存。

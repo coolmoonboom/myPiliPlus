@@ -194,6 +194,13 @@ class ModelSelector extends StatefulWidget {
 class _ModelSelectorState extends State<ModelSelector> {
   late LocalModel _current = LocalSubtitleService.currentModel;
 
+  @override
+  void initState() {
+    super.initState();
+    // 打开设置即重扫模型目录：用户手动放进来的 ggml-*.bin 能直接显示已下载
+    widget.modelManager.refresh();
+  }
+
   void _select(LocalModel model) {
     if (model == _current) {
       return;
@@ -259,6 +266,7 @@ class _ModelSelectorState extends State<ModelSelector> {
   }
 
   Future<void> _pickImport() async {
+    await widget.modelManager.refresh();
     final candidates = await widget.modelManager.importCandidates();
     if (candidates.isEmpty) {
       SmartDialog.showToast('未在 Download 目录找到 ggml-*.bin 模型文件');
@@ -274,7 +282,7 @@ class _ModelSelectorState extends State<ModelSelector> {
           if (model != null) {
             SmartDialog.showToast('已导入 ${model.label} 模型');
           } else {
-            SmartDialog.showToast('导入失败：模型文件名需为 ggml-<name>.bin');
+            SmartDialog.showToast('导入失败：文件名需为 ggml-<name>.bin 且内容为有效模型文件');
           }
           Get.back();
         },

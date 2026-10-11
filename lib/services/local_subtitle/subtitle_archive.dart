@@ -212,6 +212,16 @@ abstract final class SubtitleArchiveStore {
     return File(p.join(dir.path, '${bvid}_$cid.zip'));
   }
 
+  /// 删除该视频的字幕存档缓存（清除全部识别结果时调用）。
+  static Future<void> deleteCache(String bvid, int cid) async {
+    try {
+      final file = await _cacheFile(bvid, cid);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
   /// 生成导出文件名：标题前五个字 + BV 号，例如「测试视频+BV1xx411c7mD.zip」。
   static String exportFileName(String title, String bvid) {
     final sanitized = _sanitize(title);

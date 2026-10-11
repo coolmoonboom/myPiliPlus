@@ -129,9 +129,16 @@ abstract final class LocalSubtitleService {
     bool withSegments = false,
     bool splitOnWord = false,
     bool keepModelLoaded = false,
-    int threads = 3,
+    int? threads,
     void Function(int percent)? onProgress,
   }) async {
+    // 默认 6 线程会吃满手机 CPU 触发系统 ANR 弹窗，让出核给 UI 与解码；
+    // 实测手机 turbo q5_0 3线程 RTF≈5（15s 音频约 75s），大模型提到 4 线程提速。
+    final effectiveThreads =
+        threads ??
+        (model.arch == WhisperModel.large || model.arch == WhisperModel.medium
+            ? 4
+            : 3);
     final modelPath = await ModelManager.instance.pathOf(model);
     final validation = await ModelManager.instance.validate(model);
     SubtitleDebugLog.instance.log(
@@ -154,8 +161,7 @@ abstract final class LocalSubtitleService {
           noContext: noContext,
           suppressNonSpeechTokens: suppressNonSpeechTokens,
           keepModelLoaded: keepModelLoaded,
-          // 默认 6 线程会吃满手机 CPU 触发系统 ANR 弹窗，让出核给 UI 与解码
-          threads: threads,
+          threads: effectiveThreads,
         ),
         modelPath: modelPath,
         onProgress: onProgress,

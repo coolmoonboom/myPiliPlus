@@ -58,8 +58,7 @@ class LiveSubtitleSession extends GetxController {
   final RxList<LocalSubtitleSegment> segments = <LocalSubtitleSegment>[].obs;
 
   /// 已识别时间区间（识别覆盖进度），与识别器共享同一实例供 UI 订阅。
-  final RxList<SubtitleCoverageRange> coverage =
-      <SubtitleCoverageRange>[].obs;
+  final RxList<SubtitleCoverageRange> coverage = <SubtitleCoverageRange>[].obs;
 
   Stream<int> get positionStream => plPlayerController.position.stream;
 
@@ -319,6 +318,44 @@ class LiveSubtitleSession extends GetxController {
     );
     segments.refresh();
     unawaited(_inject(force: true));
+  }
+
+  /// 长按「重新识别该句」：重认该句所在的块并替换旧结果。
+  /// 返回 false 表示本轮页面还没开始过识别，无法单块重认。
+  bool retranscribeSegment(LocalSubtitleSegment seg) {
+    final r = _recognizer;
+    if (r == null) {
+      return false;
+    }
+    r.retranscribeAt(seg.from);
+    return true;
+  }
+
+  /// 长按「从此处开始重新识别」：清除该句（含）之后的旧结果并重新排队。
+  bool retranscribeFrom(LocalSubtitleSegment seg) {
+    final r = _recognizer;
+    if (r == null) {
+      return false;
+    }
+    r.retranscribeFrom(seg.from);
+    return true;
+  }
+
+  /// 清除全部识别结果：停止识别、清空结果/覆盖/块进度，并清空已注入的字幕轨。
+  Future<void> clearAllResults() async {
+    _recognizer?.stop();
+    _recognizer?.clearAll();
+    segments.clear();
+    segments.refresh();
+    coverage.clear();
+    _injectTimer?.cancel();
+    _injectTimer = null;
+    if (_injectTrack > 0) {
+      videoDetailController.updateSubtitleTrack(
+        _injectTrack,
+        LocalSubtitleService.buildVtt(const []),
+      );
+    }
   }
 
   /// 释放会话：停止识别、释放模型、取消 position 订阅。由外部生命周期回调调用。

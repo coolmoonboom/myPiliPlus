@@ -151,6 +151,9 @@ class IncrementalRecognizer extends GetxController {
   /// 等于并发加载两份大模型，内存/CPU 双份开销会把之后所有块全部拖超时。
   Future<WhisperTranscribeResponse?>? _zombieRun;
 
+  /// 当前（或超时后残留在原生侧的）转写请求发起时间，用于诊断「等收尾」卡多久
+  DateTime? _nativeStartedAt;
+
   /// 已完成/已跳过的块号
   final Set<int> _settledBlocks = {};
 
@@ -198,8 +201,17 @@ class IncrementalRecognizer extends GetxController {
       _pendingRestart = true;
       _cancelled = true;
       _cancelToken?.cancel('restart requested');
-      status.value = '正在切换识别队列，等待当前片段结束…';
-      SubtitleDebugLog.instance.log('重复启动请求：标记 pendingRestart');
+      status.value = _nativeStartedAt == null
+          ? '正在切换识别队列，等待当前片段结束…'
+          : '正在切换识别队列：当前片段已运行 '
+                '${DateTime.now().difference(_nativeStartedAt!).inSeconds}s，'
+                '原生转写无法中断，结束后自动继续';
+      final held = _nativeStartedAt == null
+          ? ''
+          : '（原生段已运行 ${DateTime.now().difference(_nativeStartedAt!).inSeconds}s）';
+      SubtitleDebugLog.instance.log(
+        '重复启动请求：标记 pendingRestart$held，当前片段结束后自动重启',
+      );
       return;
     }
     _active = this;
@@ -699,14 +711,24 @@ class IncrementalRecognizer extends GetxController {
     status.value = '上一个片段仍在收尾…';
     SubtitleDebugLog.instance.log('等待超时片段的原生转写收尾…');
     final wait = _timeoutFor(model) * 1.5;
+    final baseAt = _nativeStartedAt ?? DateTime.now();
+    // 原生转写可能还要跑上一两分钟，心跳显示已用秒数避免看起来像卡死
+    final waitTicker = Timer.periodic(const Duration(seconds: 2), (_) {
+      status.value =
+          '上一个片段收尾中…（已用 '
+          '${DateTime.now().difference(baseAt).inSeconds}s，无法中断）';
+    });
     try {
       await zombie.timeout(wait);
       SubtitleDebugLog.instance.log('僵尸转写已收尾，模型驻留可复用');
     } catch (_) {
       SubtitleDebugLog.instance.log('僵尸转写 ${wait.inSeconds}s 内未结束，继续下一段');
+    } finally {
+      waitTicker.cancel();
     }
     if (identical(_zombieRun, zombie)) {
       _zombieRun = null;
+      _nativeStartedAt = null;
     }
   }
 
@@ -757,6 +779,7 @@ class IncrementalRecognizer extends GetxController {
       },
     );
     _zombieRun = run;
+    _nativeStartedAt = startedAt;
     var timedOut = false;
     try {
       // 看门狗：超过模型自适应时限视为挂起，按失败跳过，绝不永久卡住
@@ -774,6 +797,7 @@ class IncrementalRecognizer extends GetxController {
       if (!timedOut) {
         // 请求已终结（成功或抛错返回 null），不再是僵尸
         _zombieRun = null;
+        _nativeStartedAt = null;
       }
     }
     final cost = DateTime.now().difference(startedAt).inMilliseconds;
@@ -948,6 +972,83 @@ class IncrementalRecognizer extends GetxController {
     final m = seconds ~/ 60;
     final s = seconds % 60;
     return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  /// 重造（rebuild）单块：清掉块索引、尝试次数、覆盖区间与该块时间范围内的
+  /// 旧结果，使该块作为空块重新入队。
+  void _invalidateBlock(int blk) {
+    final bs = blockSeconds;
+    _settledBlocks.remove(blk);
+    _blockTries[blk] = 0;
+    coverage.removeWhere(
+      (r) => r.fromSeconds < (blk + 1) * bs && r.toSeconds > blk * bs,
+    );
+    segments.removeWhere(
+      (s) => s.from < (blk + 1) * bs && s.to >= blk * bs,
+    );
+    segments.refresh();
+  }
+
+  /// 重新识别某个时刻所在的一块（长按单条字幕的粒度）。
+  ///
+  /// 该块旧结果被清除重新入队；识别器空闲则直接开跑，
+  /// 正在转写则排队，等在途块收尾后自动按新队列执行。调用方负责持久化。
+  void retranscribeAt(double seconds) {
+    final blk = (seconds ~/ blockSeconds).clamp(0, _blockCount - 1);
+    _invalidateBlock(blk);
+    SubtitleDebugLog.instance.log(
+      '手动重认：块 $blk（${_fmt(blk * blockSeconds)} 附近）',
+    );
+    if (!running.value) {
+      unawaited(start(fromSeconds: blk * blockSeconds));
+    }
+  }
+
+  /// 从某个时刻起（含所在块）重新识别之后所有内容。
+  ///
+  /// 清除该块及更晚块的进度与旧结果（更早的保留）：更晚的块全部回到
+  /// 未完成态后，无论跟随或顺序模式，队列都会优先补上它们；
+  /// 空闲时从该块位置直接开跑。调用方负责持久化。
+  void retranscribeFrom(double seconds) {
+    final blk = (seconds ~/ blockSeconds).clamp(0, _blockCount - 1);
+    final startSec = blk * blockSeconds;
+    for (var b = blk; b < _blockCount; b++) {
+      _settledBlocks.remove(b);
+      _blockTries[b] = 0;
+    }
+    coverage.removeWhere((r) => r.fromSeconds >= startSec);
+    segments.removeWhere((s) => s.from >= startSec - 1);
+    segments.refresh();
+    SubtitleDebugLog.instance.log(
+      '手动重认：从 ${_fmt(startSec)} 起重建 ${_blockCount - blk} 块，'
+      '保留更早 ${segments.length} 条',
+    );
+    if (!running.value) {
+      unawaited(start(fromSeconds: startSec));
+    }
+  }
+
+  /// 清空全部识别结果与块进度（下次开始识别将从头再来）。
+  ///
+  /// 不停止也不启动队列，由会话层决定；调用方负责存档与字幕轨刷新。
+  void clearAll() {
+    _settledBlocks.clear();
+    _blockTries.clear();
+    coverage.clear();
+    segments.clear();
+    segments.refresh();
+    SubtitleDebugLog.instance.log('手动清除全部识别结果');
+  }
+    coverage.removeWhere((r) => r.fromSeconds >= start);
+    segments.removeWhere((s) => s.from >= start - 1);
+    segments.refresh();
+    SubtitleDebugLog.instance.log(
+      '手动重认：从 ${_fmt(start)} 起重建 '
+      '${_blockCount - blk} 块，清除旧结果 ${segments.length} 条保留',
+    );
+    if (!running.value) {
+      await start(fromSeconds: start);
+    }
   }
 
   /// 停止识别

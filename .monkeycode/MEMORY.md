@@ -164,6 +164,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - 大模型（turbo 575MB+/large 3GB）首块转写包含模型加载，固定 240s 看门狗会「首块必超时」；随后新请求与僵尸转写并发，双份大模型加载把所有后续块拖超时（3 连败后全程无字幕）。base 等小模型快，触发不了。
   - 正确设计：看门狗按 arch 自适应（tiny 150s / small·base 240s / medium 480s / large 600s）；下一块前必须 await 僵尸 Future（完成后 keepModelLoaded 会驻留模型，下一块免二次加载）；native 报 failed to load model 时立即终止不重试。
   - 模型文件侧无需担心：HF ggerganov/whisper.cpp 的 turbo/量化文件是 legacy GGML 魔数(6c6d6767)，whisper_ggml 2.6+ 内置 whisper.cpp v1.9.1 支持 turbo；插件 transcribe 按 modelPath 加载，WhisperModel 枚举只是占位。
+  - 真机实测（2026-10-11）：turbo q5_0 正常出结果但很慢——15s 音频块转写 73~97s（threads=3，RTF≈5），首块含模型加载约 75s；用户体感的「没有字幕/卡在切换队列」多半是等首块与等在途原生块收尾（不可中断，最长 ~97s），不是挂死。已将 large/medium 的线程 3→4 提速；收尾等待期加心跳显示已用秒数。
 
 [双语翻译可走本地 Offline Translator 的 LibreTranslate 兼容服务]
 - Date: 2026-10-07
