@@ -58,7 +58,8 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 本环境无 Flutter/Android SDK，无法完整编译；只能做语法级校验。
   - 代码大量使用 dot-shorthands（`.paused` 等枚举简写），stable Dart 3.9.x 无法解析；需要 dev 渠道 3.14 SDK。dev SDK 非常驻（/opt/dart314 已失效），需要时从 `https://storage.googleapis.com/dart-archive/channels/dev/release/<ver>/sdk/dartsdk-linux-x64-release.zip` 下载解压到 /tmp。
-  - 语法校验命令：`<dart-sdk>/bin/dart format --output=none <file>`；注意它只解析语法，不检查符号/导入，UI 文件仍需人工核对 material 导入。
+  - 语法校验命令：`<dart-sdk>/bin/dart format --output=none <file>`；格式化工具是容错解析，残缺的孤儿语句块（如 edit 残留的旧函数尾巴）不会报错，不能作为唯一门禁，UI 文件仍需人工核对 material 导入。
+  - 严格语法门禁：`/tmp/synchk`（analyzer ^9，Dart 3.13 SDK）。提交前跑 `cd /tmp/synchk && /tmp/dart-sdk/bin/dart run bin/synchk.dart <改动的dart文件绝对路径...>`，exit 0 才可提交推送；该工具曾因 CI 编译失败（format 漏掉的残留片段）而建立。若 /tmp/synchk 被清理，重建：pubspec 依赖 `analyzer: ^9.0.0`，用 `parseFile(path:, featureSet: FeatureSet.latestLanguageVersion())` 并 catch ArgumentError 打印诊断。
   - pubspec.yaml 固定 flutter: 3.47.5、sdk >=3.13.0，CI 的 subosito/flutter-action 通过 flutter-version-file 读取。
 
 [Release 2.2.1 发布经验]
