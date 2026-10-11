@@ -983,9 +983,7 @@ class IncrementalRecognizer extends GetxController {
     coverage.removeWhere(
       (r) => r.fromSeconds < (blk + 1) * bs && r.toSeconds > blk * bs,
     );
-    segments.removeWhere(
-      (s) => s.from < (blk + 1) * bs && s.to >= blk * bs,
-    );
+    segments.removeWhere((s) => s.from < (blk + 1) * bs && s.to >= blk * bs);
     segments.refresh();
   }
 
@@ -1038,17 +1036,6 @@ class IncrementalRecognizer extends GetxController {
     segments.clear();
     segments.refresh();
     SubtitleDebugLog.instance.log('手动清除全部识别结果');
-  }
-    coverage.removeWhere((r) => r.fromSeconds >= start);
-    segments.removeWhere((s) => s.from >= start - 1);
-    segments.refresh();
-    SubtitleDebugLog.instance.log(
-      '手动重认：从 ${_fmt(start)} 起重建 '
-      '${_blockCount - blk} 块，清除旧结果 ${segments.length} 条保留',
-    );
-    if (!running.value) {
-      await start(fromSeconds: start);
-    }
   }
 
   /// 停止识别
