@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/pages/video/subtitle_ai/debug_log_sheet.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/local_subtitle/local_models.dart';
 import 'package:PiliPlus/services/local_subtitle/local_subtitle_service.dart';
@@ -62,6 +63,11 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
     defaultValue: true,
   );
 
+  late bool _debugLog = GStorage.setting.get(
+    SettingBoxKey.subtitleDebugLog,
+    defaultValue: true,
+  );
+
   @override
   void dispose() {
     // 关闭设置面板即落盘（偏移/样式改完常在此刻），避免退出视频时丢设置。
@@ -97,7 +103,8 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
               const SizedBox(height: 12),
               ModelSelector(
                 modelManager: ModelManager.instance,
-                playerController: widget.videoDetailController.plPlayerController,
+                playerController:
+                    widget.videoDetailController.plPlayerController,
               ),
               const Divider(height: 28),
               SwitchListTile(
@@ -139,6 +146,28 @@ class _AiSubtitleSettingsSheetState extends State<AiSubtitleSettingsSheet> {
                       widget.videoDetailController.plPlayerController,
                   child: const TranslationSettingsSheet(),
                 ),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.bug_report_outlined, size: 20),
+                title: const Text('调试日志'),
+                subtitle: const Text('查看模型下载/识别/翻译全链路日志，用于定位无字幕等问题'),
+                onTap: () => showSubtitleBottomSheet(
+                  context,
+                  playerController:
+                      widget.videoDetailController.plPlayerController,
+                  child: const SubtitleDebugLogSheet(),
+                ),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('记录调试日志'),
+                subtitle: const Text('默认开启；关闭后不再记录新的日志内容'),
+                value: _debugLog,
+                onChanged: (value) {
+                  setState(() => _debugLog = value);
+                  GStorage.setting.put(SettingBoxKey.subtitleDebugLog, value);
+                },
               ),
             ],
           ),
@@ -203,8 +232,7 @@ class _ModelSelectorState extends State<ModelSelector> {
         ...ModelManager.managedModels.map((model) {
           return Obx(() {
             final state =
-                widget.modelManager.states[model.id] ??
-                ModelState.unknown;
+                widget.modelManager.states[model.id] ?? ModelState.unknown;
             return _buildRow(context, model, state);
           });
         }),
@@ -213,7 +241,9 @@ class _ModelSelectorState extends State<ModelSelector> {
           onPressed: _pickImport,
           icon: const Icon(Icons.file_download_outlined, size: 18),
           label: const Text('从 Download 导入模型'),
-          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4)),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+          ),
         ),
       ],
     );
@@ -598,10 +628,7 @@ class _ImportPicker extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Text(
-                '选择要导入的模型文件',
-                style: theme.textTheme.titleMedium,
-              ),
+              child: Text('选择要导入的模型文件', style: theme.textTheme.titleMedium),
             ),
             Flexible(
               child: ListView.builder(
@@ -811,4 +838,3 @@ class _TranslationSettingsSheetState extends State<TranslationSettingsSheet> {
     );
   }
 }
-

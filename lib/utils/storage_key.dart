@@ -189,7 +189,8 @@ abstract final class SettingBoxKey {
       translationProvider = 'translationProvider',
       translationEndpoint = 'translationEndpoint',
       translationApiKey = 'translationApiKey',
-      translationLocalEndpoint = 'translationLocalEndpoint';
+      translationLocalEndpoint = 'translationLocalEndpoint',
+      subtitleDebugLog = 'subtitleDebugLog';
 
   static const String enableSponsorBlock = 'enableSponsorBlock',
       blockSettings = 'blockSettings',
