@@ -12,7 +12,7 @@
 - **PCM 块（PCM Chunk）**：从捕获流按固定时长切分的原始音频片段，是识别的调度单位
 - **悬浮窗（Overlay）**：显示在源应用之上的系统级窗口
 - **本地翻译服务（Local Translator）**：dev.davidv.translator 提供的 LibreTranslate 兼容 HTTP 服务，默认 `http://127.0.0.1:5000/translate`
-- **模型目录（Model Directory）**：共享目录 `Download/piliplus_models`，存放 ggml 模型文件
+- **模型目录（Model Directory）**：共享目录 `Download/piliplus_models`，存放 sherpa onnx 模型
 
 ## Requirements
 
@@ -23,7 +23,7 @@
 #### Acceptance Criteria
 
 1. WHEN 用户点按「开始捕获」, System SHALL 发起 MediaProjection 授权并启动 AudioPlaybackCapture 采集其他应用的音频输出。
-2. WHILE 捕获会话进行中, System SHALL 以 16-bit PCM、16 kHz 单声道连续读取音频流并切成 PCM 块（默认 8 秒/块，可配置 5/8/12 秒）。
+2. WHILE 捕获会话进行中, System SHALL 以 16-bit PCM、16 kHz 单声道连续读取音频流并切成 PCM 块（默认 100ms/块）。
 3. IF 目标应用声明禁止音频捕获（FLAG_SECURE 或 allowedCapturePolicy 拒收）导致捕获内容为静音, System SHALL 在界面提示「该应用禁止捕获音频」并显示累计静音时长。
 4. WHEN 用户点按「停止」或移除通知栏停止, System SHALL 停止采集、释放 MediaProjection 资源并结束捕获会话。
 5. System SHALL 以前台服务承载采集与识别， Android 版本下限为 10（API 29）。
@@ -34,11 +34,11 @@
 
 #### Acceptance Criteria
 
-1. WHEN PCM 块读取完成, System SHALL 将该块送入本地 whisper 模型转写（默认 small，支持 tiny/base 切换，模型来自模型目录）。
-2. IF PCM 块的静音占比超过阈值（默认 85%，VAD 判定）, System SHALL 跳过该块转写并标记为静音块。
-3. WHEN 转写产出一条分段, System SHALL 以「会话开始时刻 + 分段相对秒数」换算绝对时间轴并追加到结果列表。
-4. WHEN 识别出相邻 PCM 块的衔接分段文本, System SHALL 去除相邻块的词重复（沿用 myPiliPlus 的块间去重策略）。
-5. IF 模型文件缺失或加载失败, System SHALL 停止识别并在界面给出「模型未下载」提示与跳转入口。
+1. WHEN PCM 块读取完成, System SHALL 将该块送入本地 sherpa 流式识别模型（默认法语 Kroko zipformer）在手机上离线识别。
+2. WHILE 流式识别进行中, System SHALL 依赖识别器内置的端点检测判句，静音期间不产出文本而不占识别线程。
+3. WHEN 识别器产出句末端点, System SHALL 将该句写入结果列表并继续接收后续音频。
+4. WHILE 一句话尚未定句, System SHALL 持续以最新的部分识别结果刷新当前行显示。
+5. IF 模型文件缺失或加载失败, System SHALL 停止识别并在界面给出「模型未下载」提示与下载入口。
 6. WHILE 捕获会话进行中, System SHALL 支持切换识别模型，切换后从新块开始使用新模型。
 
 ### Requirement 3 翻译
@@ -82,6 +82,6 @@
 
 #### Acceptance Criteria
 
-1. WHEN 应用首次启动, System SHALL 扫描模型目录列出可用 ggml 模型供选择（沿用 myPiliPlus 扫描与命名解析规则）。
+1. WHEN 应用首次启动, System SHALL 扫描模型目录列出已安装的 sherpa 模型供选择；如未安装，提供内置下载按钮从官方 releases 拉取压缩包并校验后解压到模型目录。
 2. System SHALL 提供设置项：识别模型、PCM 块长、VAD 静音阈值、翻译服务地址、悬浮窗字号与行数。
 3. WHEN 设置项被修改, System SHALL 持久化并在下一次捕获会话或下一次分块生效。

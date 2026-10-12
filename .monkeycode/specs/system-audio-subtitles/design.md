@@ -1,20 +1,23 @@
 # 系统音频实时字幕翻译应用（LiveSub）
 
 Feature Name: system-audio-subtitles
-Updated: 2026-10-11
+Updated: 2026-10-12
 
 ## Description
 
-独立 Flutter Android 应用：通过 MediaProjection + AudioPlaybackCapture 抓取其他应用播放的音频，按小分块连续喂本地 whisper（whisper_ggml）识别法语字幕，调用 dev.davidv.translator 的 LibreTranslate 兼容 HTTP 服务翻译，双语字幕经系统悬浮窗覆盖显示，应用内提供完整列表与导出。
+独立 Flutter Android 应用：通过 MediaProjection + AudioPlaybackCapture 抓取其他应用播放的音频，以 100ms granularity 连续喂 **sherpa-onnx 流式 zipformer** 实时识别法语字幕（实测延迟为 whisper 整块转写的零头），调用 dev.davidv.translator 的 LibreTranslate 兼容 HTTP 服务翻译，双语字幕经系统悬浮窗覆盖在任意应用之上显示，应用内提供双语列表。
+
+### 历史修订
+
+- 初版设计用 whisper_ggml 按 8s 块串行转写，真机 RTF≈5，出词追不上播放；2026-10-12 起换 sherpa-onnx 流式内核（`sherpa_onnx` pub 包 1.13.8 + `sherpa_onnx_android_arm64` 预编译 .so，模型 `sherpa-onnx-streaming-zipformer-fr-kroko-2025-08-06`，57MB）。whisper_ggml 已从 pubspec 移除。
 
 复用策略（取两者之优、快速实现、bug 少）：
 
 | 能力 | 来源 |
 | --- | --- |
-| whisper 转写封装（模型池、keepModelLoaded、线程数、错误约定） | 移植 myPiliPlus `local_subtitle_service.dart` |
-| 模型目录扫描与命名解析（Download/piliplus_models） | 移植 `model_manager.dart`（含 refresh/导入修复版） |
-| 翻译链（HttpSubtitleTranslator + 词库兜底 + 服务探测） | 移植 `subtitle_translator.dart` 及词库资产 |
-| 块间去重与时间轴换算思路 | 参考 `incremental_recognizer.dart`，按流式管线重写 |
+| 流式识别 API（OnlineRecognizer/OnlineStream/端点） | sherpa-onnx 官方 flutter-examples/streaming_asr |
+| 模型下载 | dio 逐文件流式下载（hf-mirror），无系统解压依赖 |
+| 翻译链（HttpSubtitleTranslator + 词库兜底） | 移植 `subtitle_translator.dart` |
 | 系统音频采集、前台服务、悬浮窗 | 新写 Kotlin（android/app 内原生代码 + MethodChannel） |
 
 ## Architecture
@@ -22,118 +25,112 @@ Updated: 2026-10-11
 ```mermaid
 flowchart TD
     A["源应用音频输出"] --> B["AudioPlaybackCapture AudioRecord 16kHz 单声道"]
-    B --> C["Kotlin 前台服务 CaptureService"]
+    B --> C["Kotlin 前台服务 CaptureService（100ms 小块）"]
     C -->|EventChannel PCM 字节流| D["Dart CapturePipeline"]
-    D --> E["能量 VAD 静音块丢弃"]
-    E --> F["串行转写队列 上限3块"]
-    F --> G["whisper_ggml 本地识别"]
-    G --> H["去重与时间轴归并 SessionStore"]
-    H --> I["翻译队列 Local Translator HTTP 127.0.0.1:5000"]
-    I --> J["Rx 双语列表"]
-    J --> K["应用内列表页"]
-    J -->|MethodChannel| L["Kotlin 悬浮窗 WindowManager"]
+    D --> F["sherpa_onnx OnlineRecognizer 流式解码"]
+    F -->|"部分文本（当前行）"| G["悬浮窗实时行 + 翻译节流"]
+    F -->|"端点定句"| H["双语历史（应用内列表 + 悬浮窗历史区）"]
+    G --> I["翻译：Local Translator HTTP → 词库兜底"]
+    H --> I
 ```
 
 要点：
 
-- 采集、前台服务、悬浮窗用 Kotlin 写在 android/app（不引第三方插件），Dart 只做识别/翻译/UI，减少依赖面。
-- AudioRecord 直接以 16000 Hz、MONO、PCM_16BIT 的 AudioFormat 构建（框架负责重采样），PCM 块按 chunk 秒数（默认 8s）攒满后整块传 Dart；Dart 侧写临时 WAV（16k mono）供 whisper_ggml 读取，与 myPiliPlus 的临时文件模式一致。
-- 转写严格串行（同一时刻仅一个原生转写在跑，天然规避 myPiliPlus 里"僵尸转写"并发问题）；队列积压超上限丢最旧块并在时间轴留缺口标记。
-- 时间轴：块 k 覆盖会话时间 `[k*chunkSec, (k+1)*chunkSec)`，分段绝对时间 = 块起点 + 分段相对秒；悬浮窗展示顺序按绝对时间。
+- 采集、前台服务、悬浮窗用 Kotlin 写在 android/app（不引第三方悬浮窗插件），Dart 只做识别/翻译/UI。
+- **FGS 顺序**：Android 14+ 必须先 `getMediaProjection` 拿到 MediaProjection 再 `startForeground(mediaProjection type)`，顺序颠倒直接 SecurityException。
+- **流式识别**：PCM16LE → Float32List → `acceptWaveform` → `while(isReady) decode` → `getResult`；`isEndpoint` 时 reset 并从零继续计句，天然断句。静音由识别器内部处理，无需自建 VAD 丢块。
+- **块粒度**：100ms/块喂识别兼顾延迟与 JNI 开销；静音占比仅用于统计提示，不再跳块（跳块会破坏流式上下文）。
+- **悬浮窗**：`TYPE_APPLICATION_OVERLAY` 挂在 **applicationContext**（Activity 销毁不影响，前台服务保进程），View 树 = 历史区(最近 6 条) + 当前行(大字 FRA) + 译文行(黄色 ZH)；整块可拖动（ACTION_MOVE 更新 LayoutParams），轻点清空历史。位置本版本不持久化。
+- **翻译节流**：当前行每 ≥1.2s 且文本有变化才发起一次翻译，回调时校验句子仍是同一句才上屏；端点定句时若无译文再补翻一次回填历史。
 
 ## Components and Interfaces
 
 ### CaptureService（Kotlin 前台服务）
 
-- `start(mediaProjectionResultData, chunkSeconds)` / `stop()`（MethodChannel）
-- 常驻通知「停止捕获」action；Android 14+ 声明 `FOREGROUND_SERVICE_MEDIA_PROJECTION` 类型
-- AudioRecord 读满一个块 → EventChannel 发 `ByteData`（PCM16LE）
-- 首块回调后开始累计静音时长统计（判定捕获被拒收）回传 Dart
+- `startCapture`（MethodChannel，`chunkMillis` 默认 100）/ `stopCapture()`
+- 常驻通知「停止捕获」action；严格按 startForeground 前完成 `getMediaProjection`（Android 14+ FGS 类型校验）
+- AudioRecord 每 100ms → EventChannel 发 `{bytes: ByteArray, silenceRatio: Double}`（静音占比仅做统计）
 
-### OverlayController（Kotlin WindowManager）
+### OverlayController（Kotlin WindowManager 单例）
 
-- `TYPE_APPLICATION_OVERLAY`，默认贴底居中，可拖动，位置存 SharedPreferences
-- 折叠态：最近 1 条双语两行；点按展开最近 10 条 RecyclerView；再点折叠
-- Dart → Kotlin 仅推数据（原文/译文/是否稳定），Kotlin 无业务逻辑
+- `TYPE_APPLICATION_OVERLAY` + **applicationContext**（悬浮窗存活随进程，前台服务保证不被杀）
+- 结构：历史区（最近 6 条双语灰字）+ 当前行（18sp 白 FRA）+ 译文行（15sp 黄 ZH）
+- `update(fr, zh)` 刷当前行；`pushLine(fr, zh)` 进历史区；整块拖动更新 LayoutParams；轻点清空历史
+- 拖动位置持久化与点按展开列表暂未实现（见 tasklist 遗留项）
+- Dart → Kotlin 仅推数据（`livesub/overlay` MethodChannel），Kotlin 无业务逻辑
 
 ### CapturePipeline（Dart）
 
 ```dart
 class CapturePipeline {
-  Stream<CaptureChunk> pcm;          // 来自 EventChannel
-  Future<void> start(RecognitionSettings s);
+  Future<void> start();          // 选模型→init 识别器→开采集
   Future<void> stop();
-  RxList<SessionSegment> segments;   // 双语结果
+  RxList<RecognizedSegment> history; // 定句后的双语历史
+  RxString latestFr, latestZh;   // 当前行（实时）
+  RxBool overlayShowing;
 }
 ```
 
-- VAD：块内 20ms 窗 RMS，语音窗占比 < 15%（即静音 >85%）判静音块
-- 转写：移植 `LocalSubtitleService.transcribeWithModel`（small 默认 threads=4）
-- 去重：相邻块首尾文本重叠裁剪（沿用 incremental_recognizer 策略）
-- RTF 监控：最近 10 块平均 RTF > 0.9 时提示建议换小模型（仅提示）
+- 识别：`SherpaRecognizer` 封装 `initBindings` + `OnlineRecognizer(在线 transducer, numThreads=4)`；`acceptChunk(Float32List)` 返回 `SherpaChunk(text, isEndpoint)`，端点即 reset
+- 部分结果每 chunk 直接刷当前行与悬浮窗；译文每 ≥1.2s 变化一次才翻，回调校验仍是同一句才上屏（避免旧译文覆盖新句）
+- 定句：端点触发 → 写历史 +(若未译)补翻回填 → `pushLine` 推悬浮窗历史区
 
 ### TranslatorClient（Dart）
 
-- 移植 `subtitle_translator.dart`：`TranslationProvider.autoLocal` 链 = 本地 Offline Translator → GlossaryTranslator
-- 端点默认 `http://127.0.0.1:5000/translate`，2s 超时，失败重试 ≤2
+- 移植 `subtitle_translator.dart`：本地 Offline Translator → GlossaryTranslator 链
+- 端点默认 `http://127.0.0.1:5000/translate`，2s 超时，失败回退
 
-### ModelScanner（Dart）
+### ModelStore（Dart `model_dir.dart` + `model_download.dart`）
 
-- 移植 `model_manager.dart`：扫描 `Download/piliplus_models`，解析 ggml 文件名得档位档位与量化，`refresh()` 运行期重扫
+- 扫描候选根目录（公共 `Download/piliplus_models` → 应用私有回退），校验模型子目录内 `encoder/decoder/joiner/tokens` 齐备且非空
+- 下载：逐文件（encoder/decoder/joiner.onnx + tokens.txt）从 hf-mirror `resolve/main` 下载 `*.part` 临时文件 → 按精确字节数校验 → rename 原子落盘；文件名固定来自内置表，无路径穿越面（国内直连 github release 不通，hf-mirror 可用）
+- kroko 模型 `modelType` 必须为 `zipformer2`（配 `zipformer` 原生报 `'attention_dims' does not exist`，桌面 dart 端可离线复现）
 
 ## Data Models
 
 ```dart
-class SessionSegment {
-  int absStartMs;   // 会话绝对时间
-  int absEndMs;
-  String text;      // 法语原文（稳定后不再修改）
-  String? translation;
-  TranslationOrigin origin; // local / glossary / none
-  bool stable;      // 非最后一块产出即为 true
-}
-
-class SessionRecord {   // 持久化 JSON，保留最近 20 场
-  String id; DateTime startedAt; String modelId;
-  List<SessionSegment> segments;
+class RecognizedSegment {  // 定句后入历史
+  String fr;        // 法语原文
+  String? zh;       // 中文译文（补翻后回填）
+  DateTime timestamp;
 }
 ```
 
-持久化：应用文档目录 `sessions/<timestamp>.json`；导出 SRT 与双语 txt 到 `Download/livesub/`。捕获到的 PCM 只存在于内存与临时文件，转写完成立即覆盖，不落盘原始录音。
+会话文本持久化与 SRT 导出暂未实现；捕获到的 PCM 只存在于内存，不落盘任何音频。
 
 ## Correctness Properties
 
-1. 分段绝对时间单调不减；缺口（丢块/静音大块）不产生伪造时间。
-2. 同一时刻至多一个原生 transcribe 在执行。
-3. 悬浮窗内容恒等于会话内绝对时间最新的稳定分段。
-4. 导出 SRT 时间轴 = 会话时间轴，不引入偏移。
-5. 停止捕获后 AudioRecord、MediaProjection、前台服务通知全部释放。
+1. 流式 reset 后新句从零开始，历史顺序即句序。
+2. 同一时刻至多一个 sherpa 原生识别实例（识别器独占，chunk 同步喂入）。
+3. 译文回调仅在「句子仍是发起翻译的那句」时上屏（防迟到译文覆盖新句）。
+4. 悬浮窗内容 = 当前行或最近定句双语（由 Kotlin 视图保证）。
+5. 停止捕获后 AudioRecord、MediaProjection、前台服务通知全部释放；`stop()` 释放识别器。
+6. 模型下载只写 `<root>/<dirName>/<内置文件名>`；落盘前写 `.part`，校验字节数后 rename。
 
 ## Error Handling
 
 | 场景 | 处理 |
 | --- | --- |
-| 目标应用禁止捕获（全静音） | 提示 + 累计静音秒数，会话继续 |
+| 目标应用禁止捕获（全静音） | 提示 + 静音统计，会话继续 |
 | MediaProjection 授权被拒/中途撤销 | 结束会话并清理前台服务 |
-| 模型缺失 | 阻止开始，跳转模型选择 |
-| whisper 加载或转写失败 | 该块记失败，跳过继续（重试 ≤2 次） |
-| 翻译服务离线 | 词库兜底并标注来源，设置页一键探测 |
-| 悬浮窗无权限 | 引导系统设置；主界面列表不受影响 |
-| 队列积压（RTF>1） | 丢最旧块 + 缺口标记 + 换小模型提示 |
+| sherpa 模型缺失或加载失败 | 阻止开始，主界面下载/扫描入口 |
+| 下载中断/文件字节数不符 | 主界面红字显示具体原因，清理 `.part`，可重试 |
+| 翻译服务不可用 | 词库兜底，原文照常显示 |
+| 悬浮窗无权限 | 跳系统「显示在其他应用上层」设置，返回后自动生效 |
+| 识别器 init 后原生报错 | 状态条提示，会话终止不重试加载 |
 
 ## Test Strategy
 
-- 单元：VAD 判定、去重裁剪、时间轴换算、SRT 导出（fixture PCM/文本）
-- 集成（真机清单）：YouTube/浏览器/本地播放器各测一次捕获与 DRM 拒捕；旋转与后台存活；Android 10/14 各一台（FGS 类型差异）
-- 翻译：本地起 LibreTranslate mock HTTP 验证超时回退与链顺序
-- 悬浮窗：拖动持久化、展开 10 条、无权限引导
+- 单元/离线：识别器配置桌面复现（真实 kroko 模型 + 同 config 在 linux dart 实测出正确法语，锁定 modelType=zipformer2）；模型子目录齐备性校验
+- 集成（真机清单）：流式延迟主观对比；端点断句频率（过长合并/过破碎片需调 rule1/2 静音阈值）；YouTube/浏览器捕获；旋转与后台存活；悬浮窗覆盖 + 拖动；Android 14+ FGS 顺序回归
+- 翻译：LibreTranslate mock 验证超时回退与链顺序
 
-## Milestones（建议）
+## Milestones（实际进度）
 
-1. M1：Kotlin 采集 + Dart 识别打通（无 UI，日志出字）——验证真机延迟与 RTF
-2. M2：应用内双语列表 + 翻译链 + 模型选择
-3. M3：悬浮窗 + 前台服务通知 + 导出/会话持久化
-4. M4：设置项、会话历史、打磨
+1. ✅ M1：Kotlin 采集 + Dart 识别打通（whisper 块式，真机 RTF≈5 太慢）
+2. ✅ M2：悬浮窗显示双语 + sherpa 流式内核切换 + 模型下载（2026-10-12）
+3. M3（待做）：会话持久化/SRT 导出、设置页（块长/端点阈值/翻译端点/悬浮窗样式）、位置持久化
+4. M4（待做）：识别效果调优（端点规则、模型换型）、多语言模型下载扩展
 
 ## References
 

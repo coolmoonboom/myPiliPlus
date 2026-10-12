@@ -30,21 +30,38 @@
   - [x] 5.2 调试日志页复用 myPiliPlus debug_log_sheet 模式
   - [x] 5.3 `flutter build apk --release --target-platform android-arm64` 构建成功
   - [x] 5.4 以 tag livesub-m1 创建 Release 并上传 APK，curl 验证下载 200
-- [ ] 6. 检查点 — M1 真机验证延迟与捕获可用性，向用户确认后再进 M2
+- [ ] 6. 检查点 — M1 真机验证：FGS 崩溃已修、共享目录已修；whisper 块式 RTF≈5 太慢 → 触发换流式内核（见任务 11）；v0.1.2 已发布待复测
 
-- [ ] 7. Kotlin 悬浮窗（M2，R4）
-  - [ ] 7.1 OverlayController：TYPE_APPLICATION_OVERLAY 折叠双语两行，MethodChannel 收数据（R4-1/2）
-  - [ ] 7.2 拖动与位置持久化、点按展开最近 10 条 RecyclerView（R4-3/4)
-  - [ ] 7.3 SYSTEM_ALERT_WINDOW 权限引导（R4-5）
+- [x] 7. Kotlin 悬浮窗（M2，R4）
+  - [x] 7.1 OverlayController：TYPE_APPLICATION_OVERLAY「历史区 + 当前双语行」，livesub/overlay 通道 show/hide/update/pushLine（R4-1/2）
+  - [x] 7.2 整块拖动（ACTION_MOVE 更新 LayoutParams）；轻点清空历史（R4-3；展开列表/位置持久化遗留 M3）
+  - [x] 7.3 SYSTEM_ALERT_WINDOW 权限引导：ACTION_MANAGE_OVERLAY_PERMISSION + onActivityResult 回传结果（R4-5）
+  - [x] 7.4 悬浮窗视图绑定 applicationContext，FGS 保活覆盖任意前台应用
 
-- [ ] 8. 应用内完整界面（M2，R5、R6）
-  - [ ] 8.1 双语列表页 + 长按操作（复制原文/译文/重译该句）（R5-1/2）
+- [ ] 8. 应用内完整界面（M2 部分完成，R5 partially）
+  - [x] 8.1 双语列表页（应用内历史列表 + 当前行卡片），长按操作未做（R5-1；R5-2 遗留）
   - [ ] 8.2 会话历史页（最近 20 场查看/重导出）（R5-5）
-  - [ ] 8.3 设置页：模型/块长/VAD 阈值/翻译端点/悬浮窗字号，修改即持久化（R6-2/3）
+  - [ ] 8.3 设置页：块长/端点阈值/翻译端点/悬浮窗字号（R6-2/3）
   - [ ] 8.4 设置页翻译服务探测按钮（R3-4）
 
-- [ ] 9. 收尾与发布（M2）
-  - [ ] 9.1 修正 M1 真机反馈问题
-  - [ ] 9.2 `flutter build apk --release --target-platform android-arm64`，tag 递增发布到 myPiliPlus Release
+- [x] 11. 流式识别内核切换 + 模型下载（2026-10-12，响应用户性能反馈）
+  - [x] 11.1 pubspec 移除 whisper_ggml，新增 sherpa_onnx ^1.13.8 + archive ^3.6.1；arm64 验证 libonnxruntime.so/libsherpa-onnx-c-api.so 已打包
+  - [x] 11.2 SherpaRecognizer：initBindings + OnlineRecognizer(numThreads=4)；acceptChunk 返回 text+isEndpoint，端点自动 reset
+  - [x] 11.3 CaptureService 块长 chunkSeconds 8 → chunkMillis 100，静音占比仅统计不再跳块
+  - [x] 11.4 翻译节流：≥1.2s 且文本变化才翻；回调校验同句才上屏；端点定句后补翻回填历史
+  - [x] 11.5 ModelDownloader：kroko fr 55MB tar.bz2 下载（体积进度）→ BZip2+Tar 解压（真实包离线验证）→ 防路径穿越 → 删除归档
+  - [x] 11.6 ModelDir 改扫 sherpa 子目录（encoder/decoder/joiner/tokens 齐备判定）；Home 下载按钮 + 进度条 + 重新扫描
+  - [x] 11.7 flutter analyze 零告警；构建成功 app-release.apk 95.2MB（v0.2.0）
 
-- [ ] 10. 检查点 — 确保所有分析器无 error，构建通过，如有疑问询问用户
+- [x] 9. 收尾与发布（M2）
+  - [x] 9.1 修正 M1 真机反馈问题（FGS 顺序、共享目录）
+  - [x] 9.2 `flutter build apk --release --target-platform android-arm64`，tag livesub-0.2.0 发布到 myPiliPlus Release
+
+- [x] 12. 0.2.1 修复「模型加载失败」+ 下载链路改造（2026-10-12，响应用户真机反馈）
+  - [x] 12.1 桌面 dart 用真实 kroko 模型复现：modelType=zipformer 原生报 `'attention_dims' does not exist`；改 **zipformer2** 后实测输出正确法语
+  - [x] 12.2 SherpaModel 重构：downloadUrl(tar.bz2) → fileBaseUrl(hf-mirror resolve/main) + fileBytes 逐文件表；移除 archive 依赖
+  - [x] 12.3 ModelDownloader 逐文件下载 .part → 字节数校验 → rename；失败原因红字显示在主界面并显示当前文件名
+  - [x] 12.4 识别器 initError 透传到状态条「模型加载失败: 原因」
+  - [ ] 12.5 v0.2.1 构建 + tag livesub-0.2.1 发布
+
+- [ ] 10. 检查点 — 0.2.1 真机回归：下载→加载→流式延迟/端点断句/悬浮窗覆盖效果；按反馈调端点阈值

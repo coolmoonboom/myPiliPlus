@@ -176,3 +176,32 @@ Entries discovered by the Agent during task execution should follow this format:
   - 本 App 的 `TranslationService`（lib/services/local_subtitle/subtitle_translator.dart）provider 有：glossary(0,在线优先)/http(1)/local(2,仅本地)/autoLocal(3,本地优先回退在线/词库，默认)。本地地址常量 `kOfflineTranslatorEndpoint=http://127.0.0.1:5000/translate`，设置键 `translationLocalEndpoint`。
   - 关键实现点：LibreTranslate 响应是顶层 `translatedText`（MyMemory 才是 `responseData.translatedText`），解析需两者兼容；LibreTranslate 目标语言用 `zh`（MyMemory 要 `zh-CN`）。
   - Android 明文：targetSdk 37 默认禁 cleartext，需 `android/app/src/main/res/xml/network_security_config.xml` 只放行 `127.0.0.1`/`localhost`，并在 AndroidManifest 的 `<application>` 加 `android:networkSecurityConfig`。
+
+[LiveSub 测试应用本地安卓构建环境]
+- Date: 2026-10-11
+- Context: Discovered by Agent while building LiveSub (system-audio-subtitles) in sandbox
+- Category: Environment Configuration
+- Instructions:
+  - Flutter stable 3.47.7 + Android SDK 已装在 /opt（env: source /opt/livesub_env.sh）；flutter 发行包官方 GCS 会报 UserProjectAccountProblem（计费问题），必须用镜像 https://storage.flutter-io.cn/flutter_infra_release/releases/stable/linux/...
+  - LiveSub 工程在 /tmp/livesub（不在 git）；APK 产物发布到 coolmoonboom/myPiliPlus 仓库 release，不提交新项目代码。
+  - Android 构建内存吃紧（8G 主机）：android/gradle.properties 已限 -Xmx1800m；构建必须经 background_terminal_create 加 memory_percent。
+
+[LiveSub 独立应用：悬浮窗 + sherpa 流式]
+- Date: 2026-10-12
+- Context: Discovered by Agent while implementing overlay + streaming ASR for LiveSub
+- Category: Environment Configuration
+- Instructions:
+  - 切换识别内核 whisper_ggml → sherpa_onnx（1.13.8，流式 zipformer），pubspec 移除 whisper_ggml、新增 sherpa_onnx（0.2.1 起移除 archive，改为逐文件下载）。
+  - 模型: sherpa-onnx-streaming-zipformer-fr-kroko-2025-08-06，**modelType 必须是 zipformer2**；配成 zipformer 时原生直接报 `'attention_dims' does not exist in the metadata`，App 表现为「模型加载失败」。桌面 dart 端用同一份 sherpa_onnx 包 + 同配置可离线复现此类原生错误。
+  - 模型下载（0.2.1 起）: 逐文件从 hf-mirror 下载 `https://hf-mirror.com/csukuangfj/<dir>/resolve/main/<file>`（encoder/decoder/joiner.onnx + tokens.txt，共 ~71MB），.part 临时文件 + 大小校验 + rename 原子落盘；国内直连 github.com 下载不通是此前「下载不了」的主因。手动兜底目录 /storage/emulated/0/Download/piliplus_models/<dir>/。
+  - 捕获块长改为 100ms（chunkMillis，原 chunkSeconds=8）以适配流式。
+  - 悬浮窗: OverlayController.kt 用 SYSTEM_ALERT_WINDOW + WindowManager，悬浮窗视图绑定 applicationContext 而非 Activity， survives Activity 回收。由 livesub/overlay MethodChannel show/hide/update/pushLine 控制，FGS mediaProjection 进程保活。
+  - AndroidManifest 加入 SYSTEM_ALERT_WINDOW + FOREGROUND_SERVICE_MEDIA_PROJECTION；FGS mediaProjection 必须在 getMediaProjection 后 startForeground。
+  - 发布: APK 不进 git，推到 coolmoonboom/myPiliPlus release（tag livesub-x.y.z）。
+
+[用户教学：不要反复打包 APK]
+- Date: 2026-10-12
+- Context: User explicitly said "别老跑apk" after multiple builds for the 2.4.16 feature
+- Category: Workflow & Collaboration
+- Instructions:
+  - 除用户明确要求验证，否则不要每次改动都 `flutter build apk`；先静态分析 flutter analyze 过，再在需要验证的里程结点统一打一次。
